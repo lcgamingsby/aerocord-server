@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# TypeScript Build output
+dist/
+
+# Environment variables & secrets (CRITICAL: DO NOT COMMIT)
+.env
+.env.*
+!.env.example
+
+# Local data & keys
+data/
+uploads/
+*.aerocord-key
+
+# Logs & Editor
+logs/
+*.log
+.vscode/
+.idea/
+.DS_Store
