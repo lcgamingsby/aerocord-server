@@ -1,5 +1,11 @@
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
+
+// Polyfill global WebSocket for Node.js environments (< Node 22)
+if (typeof (global as any).WebSocket === 'undefined') {
+  (global as any).WebSocket = WebSocket;
+}
 
 const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-service-key';
@@ -19,6 +25,10 @@ export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseServic
   auth: {
     autoRefreshToken: false,
     persistSession: false
+  },
+  // Provide WebSocket implementation to support all Node versions on Railway/Render/Docker
+  realtime: {
+    transport: WebSocket as any
   }
 });
 

@@ -9,6 +9,9 @@
     "start": "node dist/index.js",
     "build:start": "npm run build && npm start"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
     "bcryptjs": "^3.0.2",
@@ -20,7 +23,8 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
     "socket.io": "^4.8.1",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -30,6 +34,7 @@
     "@types/multer": "^1.4.12",
     "@types/node": "^22.13.5",
     "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.7.3"
   }
