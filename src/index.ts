@@ -15,6 +15,7 @@ import * as authController from './controllers/authController';
 import * as serverController from './controllers/serverController';
 import * as dmController from './controllers/dmController';
 import * as mediaController from './controllers/mediaController';
+import { startMediaCleanupScheduler, cleanupExpiredMedia } from './jobs/cleanupJob';
 
 const app = express();
 const server = http.createServer(app);
@@ -114,6 +115,12 @@ router.post('/media/upload', requireAuth, uploadMedia.single('file'), mediaContr
 router.get('/media/stickers', requireAuth, mediaController.getStickerPacks);
 router.post('/media/stickers/custom', requireAuth, uploadMedia.single('file'), mediaController.createCustomSticker);
 
+// Admin Media Cleanup Route
+router.post('/admin/cleanup-media', async (_req, res) => {
+  const result = await cleanupExpiredMedia(30);
+  res.json({ success: true, result });
+});
+
 app.use('/api', router);
 
 // Root health check
@@ -124,6 +131,7 @@ app.get('/', (_req: Request, res: Response) => {
     version: '2.0.0',
     database: 'Supabase PostgreSQL',
     storage: 'Supabase Storage',
+    mediaRetention: '30 days auto-purge',
     timestamp: new Date().toISOString()
   });
 });
@@ -159,4 +167,7 @@ server.listen(PORT, () => {
   console.log(`🚀 AeroCord Backend running on port ${PORT}`);
   console.log(`📦 Database: Supabase PostgreSQL`);
   console.log(`🗄️  Storage: Supabase Storage`);
+  
+  // Start 30-day media retention scheduler
+  startMediaCleanupScheduler();
 });
