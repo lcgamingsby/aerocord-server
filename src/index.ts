@@ -21,50 +21,36 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 4000;
 
 // ============================================================
-// CORS: Dynamic Origin Checker (Supports Vercel, Railway, Localhost)
+// 1. Top-Level Unconditional CORS Middleware (Ensures headers on ALL responses & preflights)
 // ============================================================
-const clientUrl = process.env.CLIENT_URL ? process.env.CLIENT_URL.trim().replace(/\/+$/, '') : '';
-
-const isOriginAllowed = (origin?: string): boolean => {
-  if (!origin) return true; // Allow mobile apps, curl, Postman
-  const cleanOrigin = origin.trim().replace(/\/+$/, '');
-
-  // 1. Explicit CLIENT_URL from environment variable
-  if (clientUrl && (cleanOrigin === clientUrl || cleanOrigin.startsWith(clientUrl))) {
-    return true;
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin;
+  res.header('Access-Control-Allow-Origin', origin || '*');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+    return;
   }
+  next();
+});
 
-  // 2. Any Vercel domain (production, staging, preview branches)
-  if (cleanOrigin.endsWith('.vercel.app') || cleanOrigin.includes('vercel.app')) {
-    return true;
-  }
-
-  // 3. Local development
-  if (
-    cleanOrigin.includes('localhost') ||
-    cleanOrigin.includes('127.0.0.1') ||
-    cleanOrigin.startsWith('http://localhost')
-  ) {
-    return true;
-  }
-
-  return true; // Permissive fallback for API accessibility
-};
-
+// ============================================================
+// 2. Express CORS & Helmet Security Config
+// ============================================================
 const corsOptions: cors.CorsOptions = {
-  origin: (origin, callback) => {
-    callback(null, isOriginAllowed(origin));
-  },
+  origin: true, // Echo origin to guarantee compliance
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
   credentials: true,
   optionsSuccessStatus: 200
 };
 
-// Security Middleware
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // enable pre-flight for all routes
+app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
@@ -146,19 +132,20 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'AeroCord Backend', timestamp: new Date().toISOString() });
 });
 
-// Global Error Handler
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+// Global Error Handler with guaranteed CORS headers
+app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   console.error('[Server Error]', err);
   const status = err.status || 500;
+  const origin = req.headers.origin;
+  res.header('Access-Control-Allow-Origin', origin || '*');
+  res.header('Access-Control-Allow-Credentials', 'true');
   res.status(status).json({ error: err.message || 'Internal Server Error' });
 });
 
 // Setup Socket.IO Server with CORS
 const io = new SocketIOServer(server, {
   cors: {
-    origin: (origin, callback) => {
-      callback(null, isOriginAllowed(origin));
-    },
+    origin: true,
     methods: ['GET', 'POST'],
     credentials: true
   },
@@ -172,5 +159,4 @@ server.listen(PORT, () => {
   console.log(`🚀 AeroCord Backend running on port ${PORT}`);
   console.log(`📦 Database: Supabase PostgreSQL`);
   console.log(`🗄️  Storage: Supabase Storage`);
-  console.log(`🌐 Allowed client URL: ${clientUrl || 'All Vercel & localhost domains'}`);
 });

@@ -305,48 +305,53 @@ export const changePassword = async (req: AuthenticatedRequest, res: Response): 
 };
 
 export const guestLogin = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const { guestId, customName } = req.body;
-  let targetUser: User | undefined;
+  try {
+    const { guestId, customName } = req.body;
+    let targetUser: User | undefined;
 
-  if (guestId) targetUser = await db.getUserById(guestId);
+    if (guestId) targetUser = await db.getUserById(guestId);
 
-  if (!targetUser && customName) {
-    const cleanName = customName.trim();
-    if (cleanName.length < 2) { res.status(400).json({ error: 'Nama tamu minimal harus 2 karakter.' }); return; }
-    const existing = await db.getUserByUsername(cleanName);
-    if (existing) { res.status(409).json({ error: 'Nama pengguna/tamu tersebut sudah digunakan. Silakan gunakan nama lain.' }); return; }
+    if (!targetUser && customName) {
+      const cleanName = customName.trim();
+      if (cleanName.length < 2) { res.status(400).json({ error: 'Nama tamu minimal harus 2 karakter.' }); return; }
+      const existing = await db.getUserByUsername(cleanName);
+      if (existing) { res.status(409).json({ error: 'Nama pengguna/tamu tersebut sudah digunakan. Silakan gunakan nama lain.' }); return; }
 
-    const discriminator = Math.floor(1000 + Math.random() * 9000).toString();
-    const guestUser: User = {
-      id: `guest_${uuidv4()}`,
-      username: cleanName,
-      discriminator,
-      email: `${cleanName.toLowerCase().replace(/\s+/g, '')}_${discriminator}@guest.aerocord.app`,
-      passwordHash: bcrypt.hashSync('guestpass123', 10),
-      avatar: getBlankSilhouetteAvatar(cleanName),
-      bannerColor: '#5865F2',
-      status: 'online',
-      customStatus: '✨ Tamu (Guest)',
-      bio: 'Akun Tamu Sementara',
-      isGuest: true,
-      emailVerified: false,
-      createdAt: new Date().toISOString()
-    };
-    await db.addUser(guestUser);
+      const discriminator = Math.floor(1000 + Math.random() * 9000).toString();
+      const guestUser: User = {
+        id: `guest_${uuidv4()}`,
+        username: cleanName,
+        discriminator,
+        email: `${cleanName.toLowerCase().replace(/\s+/g, '')}_${discriminator}@guest.aerocord.app`,
+        passwordHash: bcrypt.hashSync('guestpass123', 10),
+        avatar: getBlankSilhouetteAvatar(cleanName),
+        bannerColor: '#5865F2',
+        status: 'online',
+        customStatus: '✨ Tamu (Guest)',
+        bio: 'Akun Tamu Sementara',
+        isGuest: true,
+        emailVerified: false,
+        createdAt: new Date().toISOString()
+      };
+      await db.addUser(guestUser);
 
-    const mainServer = await db.getServerById('srv_main');
-    if (mainServer) {
-      const updatedMembers = [...(mainServer.members || []), { userId: guestUser.id, serverId: 'srv_main', roleIds: ['role_member'], joinedAt: new Date().toISOString() }];
-      await db.updateServer('srv_main', { members: updatedMembers });
+      const mainServer = await db.getServerById('srv_main');
+      if (mainServer) {
+        const updatedMembers = [...(mainServer.members || []), { userId: guestUser.id, serverId: 'srv_main', roleIds: ['role_member'], joinedAt: new Date().toISOString() }];
+        await db.updateServer('srv_main', { members: updatedMembers });
+      }
+      targetUser = guestUser;
     }
-    targetUser = guestUser;
+
+    if (!targetUser) { res.status(400).json({ error: 'Nama tamu harus diisi untuk masuk.' }); return; }
+
+    const token = generateToken(targetUser);
+    const { passwordHash: _, ...safeUser } = targetUser;
+    res.json({ token, user: safeUser });
+  } catch (err: any) {
+    console.error('Guest login error:', err);
+    res.status(500).json({ error: err.message || 'Terjadi kesalahan pada server saat masuk tamu.' });
   }
-
-  if (!targetUser) { res.status(400).json({ error: 'Nama tamu harus diisi untuk masuk.' }); return; }
-
-  const token = generateToken(targetUser);
-  const { passwordHash: _, ...safeUser } = targetUser;
-  res.json({ token, user: safeUser });
 };
 
 export const logout = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
