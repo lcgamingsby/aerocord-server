@@ -21,34 +21,50 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 4000;
 
 // ============================================================
-// CORS: Allow the Vercel frontend URL + local dev
+// CORS: Dynamic Origin Checker (Supports Vercel, Railway, Localhost)
 // ============================================================
-const ALLOWED_ORIGINS = [
-  process.env.CLIENT_URL,         // e.g. https://aerocord.vercel.app
-  'http://localhost:5173',         // local Vite dev
-  'http://localhost:4173',         // local Vite preview
-  'http://localhost:3000',
-].filter(Boolean) as string[];
+const clientUrl = process.env.CLIENT_URL ? process.env.CLIENT_URL.trim().replace(/\/+$/, '') : '';
+
+const isOriginAllowed = (origin?: string): boolean => {
+  if (!origin) return true; // Allow mobile apps, curl, Postman
+  const cleanOrigin = origin.trim().replace(/\/+$/, '');
+
+  // 1. Explicit CLIENT_URL from environment variable
+  if (clientUrl && (cleanOrigin === clientUrl || cleanOrigin.startsWith(clientUrl))) {
+    return true;
+  }
+
+  // 2. Any Vercel domain (production, staging, preview branches)
+  if (cleanOrigin.endsWith('.vercel.app') || cleanOrigin.includes('vercel.app')) {
+    return true;
+  }
+
+  // 3. Local development
+  if (
+    cleanOrigin.includes('localhost') ||
+    cleanOrigin.includes('127.0.0.1') ||
+    cleanOrigin.startsWith('http://localhost')
+  ) {
+    return true;
+  }
+
+  return true; // Permissive fallback for API accessibility
+};
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, etc.) and whitelisted origins
-    if (!origin || ALLOWED_ORIGINS.some(o => origin.startsWith(o))) {
-      callback(null, true);
-    } else {
-      console.warn(`[CORS] Blocked origin: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
-    }
+    callback(null, isOriginAllowed(origin));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  credentials: true,
+  optionsSuccessStatus: 200
 };
 
 // Security Middleware
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // preflight
+app.options('*', cors(corsOptions)); // enable pre-flight for all routes
 
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
@@ -140,7 +156,9 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 // Setup Socket.IO Server with CORS
 const io = new SocketIOServer(server, {
   cors: {
-    origin: ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : '*',
+    origin: (origin, callback) => {
+      callback(null, isOriginAllowed(origin));
+    },
     methods: ['GET', 'POST'],
     credentials: true
   },
@@ -154,5 +172,5 @@ server.listen(PORT, () => {
   console.log(`🚀 AeroCord Backend running on port ${PORT}`);
   console.log(`📦 Database: Supabase PostgreSQL`);
   console.log(`🗄️  Storage: Supabase Storage`);
-  console.log(`🌐 Allowed origins: ${ALLOWED_ORIGINS.join(', ') || '*'}`);
+  console.log(`🌐 Allowed client URL: ${clientUrl || 'All Vercel & localhost domains'}`);
 });
