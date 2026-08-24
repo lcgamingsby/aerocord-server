@@ -1,4 +1,4 @@
-﻿import { Response } from 'express';
+import { Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../config/database';
@@ -50,6 +50,8 @@ export const checkAvailability = async (req: AuthenticatedRequest, res: Response
   res.json({ usernameAvailable, emailAvailable });
 };
 
+import { getBlankSilhouetteAvatar } from '../constants/avatar';
+
 export const register = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const { username, email, password, avatar } = req.body;
 
@@ -79,13 +81,7 @@ export const register = async (req: AuthenticatedRequest, res: Response): Promis
   const salt = bcrypt.genSaltSync(10);
   const passwordHash = bcrypt.hashSync(password, salt);
 
-  const defaultAvatars = [
-    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
-    'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80'
-  ];
-  const userAvatar = avatar || defaultAvatars[Math.floor(Math.random() * defaultAvatars.length)];
+  const userAvatar = avatar || getBlankSilhouetteAvatar(cleanUsername);
 
   const newUser: User = {
     id: `user_${uuidv4()}`,
@@ -103,7 +99,7 @@ export const register = async (req: AuthenticatedRequest, res: Response): Promis
 
   await db.addUser(newUser);
 
-  // Auto-join default server
+  // Auto-join default server if it exists
   const mainServer = await db.getServerById('srv_main');
   if (mainServer) {
     const updatedMembers = [...(mainServer.members || []), {
@@ -327,7 +323,7 @@ export const guestLogin = async (req: AuthenticatedRequest, res: Response): Prom
       discriminator,
       email: `${cleanName.toLowerCase().replace(/\s+/g, '')}_${discriminator}@guest.aerocord.app`,
       passwordHash: bcrypt.hashSync('guestpass123', 10),
-      avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanName}`,
+      avatar: getBlankSilhouetteAvatar(cleanName),
       bannerColor: '#5865F2',
       status: 'online',
       customStatus: '✨ Tamu (Guest)',
@@ -346,8 +342,7 @@ export const guestLogin = async (req: AuthenticatedRequest, res: Response): Prom
     targetUser = guestUser;
   }
 
-  if (!targetUser && !customName) targetUser = await db.getUserById('user_alice');
-  if (!targetUser) { res.status(404).json({ error: 'Guest user not found.' }); return; }
+  if (!targetUser) { res.status(400).json({ error: 'Nama tamu harus diisi untuk masuk.' }); return; }
 
   const token = generateToken(targetUser);
   const { passwordHash: _, ...safeUser } = targetUser;
