@@ -114,6 +114,7 @@ router.get('/channels/:channelId/messages', requireAuth, dmController.getChannel
 router.post('/media/upload', requireAuth, uploadMedia.single('file'), mediaController.uploadAttachment);
 router.get('/media/stickers', requireAuth, mediaController.getStickerPacks);
 router.post('/media/stickers/custom', requireAuth, uploadMedia.single('file'), mediaController.createCustomSticker);
+router.get('/media/link-preview', requireAuth, mediaController.getLinkPreview);
 
 // Admin Media Cleanup Route
 router.post('/admin/cleanup-media', async (_req, res) => {

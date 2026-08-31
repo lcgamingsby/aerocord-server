@@ -110,6 +110,32 @@ export interface Attachment {
   height?: number;
 }
 
+export interface PollOption {
+  id: string;
+  text: string;
+  votes: string[]; // User IDs who voted for this option
+}
+
+export interface Poll {
+  id: string;
+  question: string;
+  options: PollOption[];
+  isMultiChoice?: boolean;
+  allowMultipleVotes?: boolean;
+  expiresAt?: string;
+  closed?: boolean;
+}
+
+export interface LinkPreviewData {
+  url: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  siteName?: string;
+  favicon?: string;
+  youtubeId?: string;
+}
+
 export interface Message {
   id: string;
   channelId: string;
@@ -122,6 +148,8 @@ export interface Message {
   replyToId?: string;
   replyToMessage?: Partial<Message>;
   reactions: Reaction[];
+  poll?: Poll;
+  linkPreviews?: LinkPreviewData[];
   isPinned: boolean;
   isEdited: boolean;
   createdAt: string;

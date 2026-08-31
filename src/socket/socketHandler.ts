@@ -64,8 +64,10 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       attachments?: any[];
       stickerUrl?: string;
       replyToId?: string;
+      poll?: any;
+      linkPreviews?: any[];
     }) => {
-      let { channelId, content, attachments = [], stickerUrl, replyToId } = data;
+      let { channelId, content, attachments = [], stickerUrl, replyToId, poll, linkPreviews } = data;
 
       const authorUser = await db.getUserById(userId);
       const isGuest = authorUser?.isGuest || authorUser?.id.startsWith('guest_') || authorUser?.email.endsWith('@guest.aerocord.app');
@@ -80,7 +82,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
         });
       }
 
-      if (!content && attachments.length === 0 && !stickerUrl) return;
+      if (!content && attachments.length === 0 && !stickerUrl && !poll) return;
 
       let replyToMessage: Partial<Message> | undefined;
       if (replyToId) {
@@ -106,6 +108,8 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
         replyToId,
         replyToMessage,
         reactions: [],
+        poll,
+        linkPreviews,
         isPinned: false,
         isEdited: false,
         createdAt: new Date().toISOString()
@@ -139,22 +143,35 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       const { messageId, content } = data;
       const msg = await db.getMessageById(messageId);
       if (!msg || msg.authorId !== userId) return;
-      const updated = await db.updateMessage(messageId, { content: content.trim() });
+
+      const updated = await db.updateMessage(messageId, { content: content.trim(), isEdited: true, editedAt: new Date().toISOString() });
       if (updated) {
-        const authorUser = await db.getUserById(msg.authorId);
-        const safeAuthor = authorUser ? (({ passwordHash: _, ...safe }) => safe)(authorUser) : undefined;
-        io.to(`channel:${msg.channelId}`).emit('message_updated', { ...updated, author: safeAuthor });
+        const author = await db.getUserById(updated.authorId);
+        const safeAuthor = author ? (({ passwordHash: _, ...safe }) => safe)(author) : undefined;
+        io.to(`channel:${updated.channelId}`).emit('message_updated', { ...updated, author: safeAuthor });
       }
     });
 
     socket.on('delete_message', async (data: { messageId: string }) => {
       const { messageId } = data;
       const msg = await db.getMessageById(messageId);
+      if (!msg || msg.authorId !== userId) return;
+
+      await db.deleteMessage(messageId);
+      io.to(`channel:${msg.channelId}`).emit('message_deleted', { messageId, channelId: msg.channelId });
+    });
+
+    socket.on('toggle_pin_message', async (data: { messageId: string }) => {
+      const { messageId } = data;
+      const msg = await db.getMessageById(messageId);
       if (!msg) return;
-      if (msg.authorId === userId) {
-        const channelId = msg.channelId;
-        await db.deleteMessage(messageId);
-        io.to(`channel:${channelId}`).emit('message_deleted', { messageId, channelId });
+
+      const updated = await db.updateMessage(messageId, { isPinned: !msg.isPinned });
+      if (updated) {
+        io.to(`channel:${updated.channelId}`).emit('message_pinned_updated', {
+          messageId: updated.id,
+          isPinned: updated.isPinned
+        });
       }
     });
 
@@ -163,21 +180,54 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       const msg = await db.getMessageById(messageId);
       if (!msg) return;
 
-      let reaction = msg.reactions.find(r => r.emoji === emoji);
-      if (!reaction) {
-        reaction = { emoji, users: [userId] };
-        msg.reactions.push(reaction);
-      } else {
-        if (reaction.users.includes(userId)) {
-          reaction.users = reaction.users.filter(id => id !== userId);
-          if (reaction.users.length === 0) msg.reactions = msg.reactions.filter(r => r.emoji !== emoji);
+      if (!msg.reactions) msg.reactions = [];
+
+      const existingReaction = msg.reactions.find(r => r.emoji === emoji);
+      if (existingReaction) {
+        if (existingReaction.users.includes(userId)) {
+          existingReaction.users = existingReaction.users.filter(uId => uId !== userId);
+          if (existingReaction.users.length === 0) {
+            msg.reactions = msg.reactions.filter(r => r.emoji !== emoji);
+          }
         } else {
-          reaction.users.push(userId);
+          existingReaction.users.push(userId);
         }
+      } else {
+        msg.reactions.push({ emoji, users: [userId] });
       }
 
       await db.updateMessage(messageId, { reactions: msg.reactions });
       io.to(`channel:${msg.channelId}`).emit('reaction_updated', { messageId, reactions: msg.reactions });
+    });
+
+    // Interactive Poll Voting
+    socket.on('vote_poll', async (data: { messageId: string; optionId: string }) => {
+      const { messageId, optionId } = data;
+      const msg = await db.getMessageById(messageId);
+      if (!msg || !msg.poll || msg.poll.closed) return;
+
+      const poll = msg.poll;
+      const isMulti = poll.isMultiChoice || poll.allowMultipleVotes;
+
+      poll.options = poll.options.map((opt: any) => {
+        const userVoted = opt.votes.includes(userId);
+        if (opt.id === optionId) {
+          return {
+            ...opt,
+            votes: userVoted ? opt.votes.filter((id: string) => id !== userId) : [...opt.votes, userId]
+          };
+        } else if (!isMulti) {
+          // Single choice removes vote from other options
+          return {
+            ...opt,
+            votes: opt.votes.filter((id: string) => id !== userId)
+          };
+        }
+        return opt;
+      });
+
+      await db.updateMessage(messageId, { poll });
+      io.to(`channel:${msg.channelId}`).emit('poll_updated', { messageId, poll });
     });
 
     // Typing Indicators

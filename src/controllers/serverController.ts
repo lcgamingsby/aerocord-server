@@ -1,4 +1,4 @@
-﻿import { Response } from 'express';
+import { Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../config/database';
 import { AuthenticatedRequest } from '../middleware/auth';
@@ -116,7 +116,7 @@ export const deleteChannel = async (req: AuthenticatedRequest, res: Response): P
 export const updateServer = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ error: 'Unauthorized.' }); return; }
   const { serverId } = req.params;
-  const { name, icon, description } = req.body;
+  const { name, icon, description, roles, members } = req.body;
   const server = await db.getServerById(serverId);
   if (!server) { res.status(404).json({ error: 'Server not found.' }); return; }
   if (server.ownerId !== req.user.id) { res.status(403).json({ error: 'Hanya server owner yang dapat mengubah pengaturan server.' }); return; }
@@ -124,6 +124,8 @@ export const updateServer = async (req: AuthenticatedRequest, res: Response): Pr
   if (name && name.trim()) updates.name = name.trim();
   if (icon !== undefined) updates.icon = icon.trim() || undefined;
   if (description !== undefined) updates.description = description.trim();
+  if (roles !== undefined) updates.roles = roles;
+  if (members !== undefined) updates.members = members;
   const updated = await db.updateServer(serverId, updates);
   res.json({ server: updated || server, message: 'Pengaturan server berhasil diperbarui.' });
 };
