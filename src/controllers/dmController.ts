@@ -7,25 +7,30 @@ import { DirectMessageConversation } from '../types';
 export const getConversations = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ error: 'Unauthorized.' }); return; }
 
-  const convos = await db.getConversations(req.user.id);
-  const populated = await Promise.all(convos.map(async c => {
-    const recipientIds = (c as any).recipientIds || (c as any).participantIds || [];
-    const recipients = (await Promise.all(
-      recipientIds.map(async (id: string) => {
-        const u = await db.getUserById(id);
-        if (!u) return null;
-        const { passwordHash: _, ...safe } = u;
-        return safe;
-      })
-    )).filter(Boolean);
+  try {
+    const convos = await db.getConversations(req.user.id);
+    const populated = await Promise.all(convos.map(async c => {
+      const recipientIds = (c as any).recipientIds || (c as any).participantIds || [];
+      const recipients = (await Promise.all(
+        recipientIds.map(async (id: string) => {
+          const u = await db.getUserById(id);
+          if (!u) return null;
+          const { passwordHash: _, ...safe } = u;
+          return safe;
+        })
+      )).filter(Boolean);
 
-    const messages = await db.getMessages(c.id, 1);
-    const lastMessage = messages[0] || null;
+      const messages = await db.getMessages(c.id, 1);
+      const lastMessage = messages[0] || null;
 
-    return { ...c, recipients, lastMessage };
-  }));
+      return { ...c, recipients, lastMessage };
+    }));
 
-  res.json({ conversations: populated });
+    res.json({ conversations: populated });
+  } catch (err: any) {
+    console.error('[getConversations Error]', err);
+    res.status(500).json({ error: err.message || 'Gagal memuat percakapan.' });
+  }
 };
 
 export const createOrGetDM = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -34,45 +39,50 @@ export const createOrGetDM = async (req: AuthenticatedRequest, res: Response): P
   const { targetUserId } = req.body;
   if (!targetUserId) { res.status(400).json({ error: 'Target user ID is required.' }); return; }
 
-  const targetUser = await db.getUserById(targetUserId);
-  if (!targetUser) { res.status(404).json({ error: 'User not found.' }); return; }
+  try {
+    const targetUser = await db.getUserById(targetUserId);
+    if (!targetUser) { res.status(404).json({ error: 'User not found.' }); return; }
 
-  const myConvos = await db.getConversations(req.user.id);
-  const existing = myConvos.find(c => {
-    const rIds = (c as any).recipientIds || (c as any).participantIds || [];
-    return c.type === 'dm' && rIds.includes(targetUserId) && rIds.includes(req.user!.id);
-  });
+    const myConvos = await db.getConversations(req.user.id);
+    const existing = myConvos.find(c => {
+      const rIds = (c as any).recipientIds || (c as any).participantIds || [];
+      return (c.type === 'dm' || !c.type) && rIds.includes(targetUserId) && rIds.includes(req.user!.id);
+    });
 
-  if (existing) {
-    const rIds = (existing as any).recipientIds || (existing as any).participantIds || [];
-    const recipients = (await Promise.all(rIds.map(async (id: string) => {
+    if (existing) {
+      const rIds = (existing as any).recipientIds || (existing as any).participantIds || [];
+      const recipients = (await Promise.all(rIds.map(async (id: string) => {
+        const u = await db.getUserById(id);
+        if (!u) return null;
+        const { passwordHash: _, ...safe } = u;
+        return safe;
+      }))).filter(Boolean);
+      res.json({ conversation: { ...existing, recipients } });
+      return;
+    }
+
+    const newConvo: DirectMessageConversation = {
+      id: `dm_${uuidv4()}`,
+      type: 'dm',
+      recipientIds: [req.user.id, targetUserId],
+      lastMessageAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
+
+    const savedConvo = await db.addConversation(newConvo);
+
+    const recipients = (await Promise.all([req.user.id, targetUserId].map(async id => {
       const u = await db.getUserById(id);
       if (!u) return null;
       const { passwordHash: _, ...safe } = u;
       return safe;
     }))).filter(Boolean);
-    res.json({ conversation: { ...existing, recipients } });
-    return;
+
+    res.status(201).json({ conversation: { ...savedConvo, recipients } });
+  } catch (err: any) {
+    console.error('[createOrGetDM Error]', err);
+    res.status(500).json({ error: err.message || 'Gagal memulai percakapan pribadi.' });
   }
-
-  const newConvo: DirectMessageConversation = {
-    id: `dm_${uuidv4()}`,
-    type: 'dm',
-    recipientIds: [req.user.id, targetUserId],
-    lastMessageAt: new Date().toISOString(),
-    createdAt: new Date().toISOString()
-  };
-
-  await db.addConversation(newConvo);
-
-  const recipients = (await Promise.all([req.user.id, targetUserId].map(async id => {
-    const u = await db.getUserById(id);
-    if (!u) return null;
-    const { passwordHash: _, ...safe } = u;
-    return safe;
-  }))).filter(Boolean);
-
-  res.status(201).json({ conversation: { ...newConvo, recipients } });
 };
 
 export const createGroupDM = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -83,27 +93,32 @@ export const createGroupDM = async (req: AuthenticatedRequest, res: Response): P
     res.status(400).json({ error: 'Recipient IDs must be a non-empty array.' }); return;
   }
 
-  const allRecipients = Array.from(new Set([req.user.id, ...recipientIds]));
+  try {
+    const allRecipients = Array.from(new Set([req.user.id, ...recipientIds]));
 
-  const newConvo: DirectMessageConversation = {
-    id: `group_dm_${uuidv4()}`,
-    type: 'group_dm',
-    name: name || `Group (${allRecipients.length})`,
-    recipientIds: allRecipients,
-    lastMessageAt: new Date().toISOString(),
-    createdAt: new Date().toISOString()
-  };
+    const newConvo: DirectMessageConversation = {
+      id: `group_dm_${uuidv4()}`,
+      type: 'group_dm',
+      name: name || `Group (${allRecipients.length})`,
+      recipientIds: allRecipients,
+      lastMessageAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
 
-  await db.addConversation(newConvo);
+    const savedConvo = await db.addConversation(newConvo);
 
-  const recipients = (await Promise.all(allRecipients.map(async id => {
-    const u = await db.getUserById(id);
-    if (!u) return null;
-    const { passwordHash: _, ...safe } = u;
-    return safe;
-  }))).filter(Boolean);
+    const recipients = (await Promise.all(allRecipients.map(async id => {
+      const u = await db.getUserById(id);
+      if (!u) return null;
+      const { passwordHash: _, ...safe } = u;
+      return safe;
+    }))).filter(Boolean);
 
-  res.status(201).json({ conversation: { ...newConvo, recipients } });
+    res.status(201).json({ conversation: { ...savedConvo, recipients } });
+  } catch (err: any) {
+    console.error('[createGroupDM Error]', err);
+    res.status(500).json({ error: err.message || 'Gagal membuat grup DM.' });
+  }
 };
 
 export const getChannelMessages = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -112,22 +127,27 @@ export const getChannelMessages = async (req: AuthenticatedRequest, res: Respons
   const { channelId } = req.params;
   const limit = parseInt(req.query.limit as string) || 100;
 
-  // Verify access for DM/Group conversations
-  if (channelId.startsWith('dm_') || channelId.startsWith('group_dm_')) {
-    const convo = await db.getConversationById(channelId);
-    const rIds = convo ? ((convo as any).recipientIds || (convo as any).participantIds || []) : [];
-    if (!convo || !rIds.includes(req.user.id)) {
-      res.status(403).json({ error: 'Access denied to this conversation.' }); return;
+  try {
+    // Verify access for DM/Group conversations
+    if (channelId.startsWith('dm_') || channelId.startsWith('group_dm_')) {
+      const convo = await db.getConversationById(channelId);
+      const rIds = convo ? ((convo as any).recipientIds || (convo as any).participantIds || []) : [];
+      if (!convo || !rIds.includes(req.user.id)) {
+        res.status(403).json({ error: 'Access denied to this conversation.' }); return;
+      }
     }
+
+    const rawMessages = await db.getMessages(channelId, limit);
+    const populated = await Promise.all(rawMessages.map(async m => {
+      const author = await db.getUserById(m.authorId);
+      let safeAuthor = undefined;
+      if (author) { const { passwordHash: _, ...safe } = author; safeAuthor = safe; }
+      return { ...m, author: safeAuthor };
+    }));
+
+    res.json({ messages: populated });
+  } catch (err: any) {
+    console.error('[getChannelMessages Error]', err);
+    res.status(500).json({ error: err.message || 'Gagal memuat pesan.' });
   }
-
-  const rawMessages = await db.getMessages(channelId, limit);
-  const populated = await Promise.all(rawMessages.map(async m => {
-    const author = await db.getUserById(m.authorId);
-    let safeAuthor = undefined;
-    if (author) { const { passwordHash: _, ...safe } = author; safeAuthor = safe; }
-    return { ...m, author: safeAuthor };
-  }));
-
-  res.json({ messages: populated });
 };

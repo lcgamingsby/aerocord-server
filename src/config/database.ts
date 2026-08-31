@@ -266,35 +266,92 @@ class Database {
   // ========== CONVERSATIONS (Direct Messages) ==========
 
   async getConversations(userId: string): Promise<DirectMessageConversation[]> {
-    const { data, error } = await supabase
-      .from('conversations')
-      .select('*')
-      .contains('participantIds', [userId]);
-    if (error) { console.error('getConversations error:', error); return []; }
-    return (data || []) as DirectMessageConversation[];
+    try {
+      const { data, error } = await supabase
+        .from('conversations')
+        .select('*');
+
+      if (error) {
+        console.error('getConversations Supabase error:', error);
+        return [];
+      }
+
+      const filtered = (data || []).filter((c: any) => {
+        const pIds = Array.isArray(c.participantIds) ? c.participantIds : (Array.isArray(c.recipientIds) ? c.recipientIds : []);
+        return pIds.includes(userId);
+      });
+
+      return filtered.map((c: any) => ({
+        ...c,
+        type: c.type || 'dm',
+        recipientIds: c.recipientIds || c.participantIds || []
+      })) as DirectMessageConversation[];
+    } catch (err) {
+      console.error('getConversations exception:', err);
+      return [];
+    }
   }
 
   async getConversationById(id: string): Promise<DirectMessageConversation | undefined> {
-    const { data, error } = await supabase.from('conversations').select('*').eq('id', id).single();
-    if (error || !data) return undefined;
-    return data as DirectMessageConversation;
+    try {
+      const { data, error } = await supabase.from('conversations').select('*').eq('id', id).single();
+      if (error || !data) return undefined;
+      return {
+        ...data,
+        type: data.type || 'dm',
+        recipientIds: data.recipientIds || data.participantIds || []
+      } as DirectMessageConversation;
+    } catch {
+      return undefined;
+    }
   }
 
   async addConversation(conv: DirectMessageConversation): Promise<DirectMessageConversation> {
-    const convData = {
-      ...conv,
-      participantIds: (conv as any).recipientIds || (conv as any).participantIds || []
+    const participantIds = (conv as any).recipientIds || (conv as any).participantIds || [];
+
+    const record: any = {
+      id: conv.id,
+      participantIds: participantIds,
+      messages: [],
+      createdAt: conv.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
-    const { data, error } = await supabase.from('conversations').insert(convData).select().single();
-    if (error) throw new Error('Failed to add conversation: ' + error.message);
-    return (data as DirectMessageConversation) || conv;
+
+    const { data, error } = await supabase.from('conversations').insert(record).select().single();
+    if (error) {
+      console.warn('[Supabase addConversation Warning]', error.message);
+      // Fallback: try raw upsert with minimal schema
+      const { data: fbData, error: fbError } = await supabase
+        .from('conversations')
+        .upsert({ id: conv.id, participantIds })
+        .select()
+        .single();
+      if (fbError) {
+        console.error('[Supabase addConversation Error]', fbError);
+        throw new Error('Gagal menambahkan percakapan: ' + fbError.message);
+      }
+      return { ...conv, ...fbData, recipientIds: participantIds };
+    }
+    return { ...conv, ...data, recipientIds: participantIds };
   }
 
   async updateConversation(id: string, updates: Partial<DirectMessageConversation>): Promise<void> {
-    await supabase
-      .from('conversations')
-      .update({ ...updates, updatedAt: new Date().toISOString() })
-      .eq('id', id);
+    try {
+      const safeUpdates: any = {
+        updatedAt: new Date().toISOString()
+      };
+      if (updates.lastMessageAt) safeUpdates.lastMessageAt = updates.lastMessageAt;
+      if (updates.name) safeUpdates.name = updates.name;
+      if ((updates as any).recipientIds) safeUpdates.participantIds = (updates as any).recipientIds;
+      if ((updates as any).participantIds) safeUpdates.participantIds = (updates as any).participantIds;
+
+      await supabase
+        .from('conversations')
+        .update(safeUpdates)
+        .eq('id', id);
+    } catch (err) {
+      console.warn('updateConversation failed gracefully:', err);
+    }
   }
 
   // ========== STICKER PACKS ==========

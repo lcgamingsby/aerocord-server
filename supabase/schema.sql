@@ -90,11 +90,27 @@ CREATE INDEX IF NOT EXISTS idx_messages_created ON messages("createdAt" DESC);
 -- ========== DIRECT MESSAGE CONVERSATIONS ==========
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
+  type TEXT DEFAULT 'dm',
+  name TEXT,
+  icon TEXT,
   "participantIds" JSONB NOT NULL DEFAULT '[]',
+  "recipientIds" JSONB DEFAULT '[]',
   messages JSONB DEFAULT '[]',
+  "lastMessageAt" TIMESTAMPTZ DEFAULT NOW(),
   "createdAt" TIMESTAMPTZ DEFAULT NOW(),
   "updatedAt" TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Ensure all columns exist on existing table
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'dm';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS icon TEXT;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS "participantIds" JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS "recipientIds" JSONB DEFAULT '[]';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS messages JSONB DEFAULT '[]';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS "lastMessageAt" TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS "updatedAt" TIMESTAMPTZ DEFAULT NOW();
 
 -- ========== STICKER PACKS ==========
 CREATE TABLE IF NOT EXISTS sticker_packs (
