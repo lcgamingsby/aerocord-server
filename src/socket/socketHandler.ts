@@ -380,6 +380,9 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
         if (room.has(userId) && room.get(userId)?.socketId === socket.id) {
           room.delete(userId);
           io.to(`voice:${rId}`).emit('voice_peer_left', { userId, channelId: rId });
+          if (rId.startsWith('dm_') || rId.startsWith('group_dm_')) {
+            io.to(`voice:${rId}`).emit('call_ended', { userId, conversationId: rId });
+          }
         }
       }
     });
