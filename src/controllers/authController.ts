@@ -409,10 +409,14 @@ export const getMe = (req: AuthenticatedRequest, res: Response): void => {
 
 export const updateProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ error: 'Unauthorized.' }); return; }
-  const { avatar, bannerColor, customStatus, bio, status, username } = req.body;
+  const { avatar, banner, bannerColor, customStatus, bio, status, username } = req.body;
   const updates: Partial<User> = {};
   if (avatar !== undefined) updates.avatar = avatar;
-  if (bannerColor !== undefined) updates.bannerColor = bannerColor;
+  if (banner !== undefined) updates.banner = banner;
+  if (bannerColor !== undefined) {
+    updates.bannerColor = bannerColor;
+    if (!updates.banner) updates.banner = bannerColor;
+  }
   if (customStatus !== undefined) updates.customStatus = customStatus;
   if (bio !== undefined) updates.bio = bio;
   if (status !== undefined) updates.status = status;

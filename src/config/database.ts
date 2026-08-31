@@ -242,8 +242,11 @@ class Database {
   }
 
   async addMessage(msg: Message): Promise<Message> {
-    const { data, error } = await supabase.from('messages').insert(msg).select().single();
-    if (error) throw new Error('Failed to add message: ' + error.message);
+    const { replyToMessage, author, ...dbPayload } = msg as any;
+    const { data, error } = await supabase.from('messages').insert(dbPayload).select().single();
+    if (error) {
+      console.error('addMessage error:', error);
+    }
     return (data as Message) || msg;
   }
 

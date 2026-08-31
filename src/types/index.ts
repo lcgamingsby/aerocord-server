@@ -7,6 +7,7 @@ export interface User {
   email: string;
   passwordHash: string;
   avatar: string;
+  banner?: string;
   bannerColor?: string;
   customStatus?: string;
   status: UserStatus;

@@ -67,75 +67,83 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       poll?: any;
       linkPreviews?: any[];
     }) => {
-      let { channelId, content, attachments = [], stickerUrl, replyToId, poll, linkPreviews } = data;
+      try {
+        let { channelId, content, attachments = [], stickerUrl, replyToId, poll, linkPreviews } = data;
 
-      const authorUser = await db.getUserById(userId);
-      const isGuest = authorUser?.isGuest || authorUser?.id.startsWith('guest_') || authorUser?.email.endsWith('@guest.aerocord.app');
+        const authorUser = await db.getUserById(userId);
+        const isGuest = authorUser?.isGuest || authorUser?.id.startsWith('guest_') || authorUser?.email.endsWith('@guest.aerocord.app');
 
-      // Strip attachments if sender is guest
-      if (isGuest && attachments && attachments.length > 0) {
-        attachments = [];
-        socket.emit('toast_notification', {
-          title: 'Batasan Akun Tamu',
-          message: 'Akun tamu tidak dapat mengirim lampiran file/gambar. Tingkatkan akun Anda ke permanen.',
-          variant: 'error'
-        });
-      }
-
-      if (!content && attachments.length === 0 && !stickerUrl && !poll) return;
-
-      let replyToMessage: Partial<Message> | undefined;
-      if (replyToId) {
-        const originalMsg = await db.getMessageById(replyToId);
-        if (originalMsg) {
-          const author = await db.getUserById(originalMsg.authorId);
-          replyToMessage = {
-            id: originalMsg.id,
-            content: originalMsg.content,
-            authorId: originalMsg.authorId,
-            author: author ? (({ passwordHash: _, ...safe }) => safe)(author) : undefined
-          };
-        }
-      }
-
-      const newMessage: Message = {
-        id: `msg_${uuidv4()}`,
-        channelId,
-        authorId: userId,
-        content: content ? content.trim() : '',
-        attachments,
-        stickerUrl,
-        replyToId,
-        replyToMessage,
-        reactions: [],
-        poll,
-        linkPreviews,
-        isPinned: false,
-        isEdited: false,
-        createdAt: new Date().toISOString()
-      };
-
-      await db.addMessage(newMessage);
-
-      const safeAuthor = authorUser ? (({ passwordHash: _, ...safe }) => safe)(authorUser) : undefined;
-      const fullMessage = { ...newMessage, author: safeAuthor };
-
-      io.to(`channel:${channelId}`).emit('new_message', fullMessage);
-
-      // If DM conversation, update lastMessageAt and notify recipients
-      if (channelId.startsWith('dm_') || channelId.startsWith('group_dm_')) {
-        const convo = await db.getConversationById(channelId);
-        if (convo) {
-          const rIds = (convo as any).recipientIds || (convo as any).participantIds || [];
-          await db.updateConversation(channelId, { lastMessageAt: newMessage.createdAt } as any);
-          rIds.forEach((recId: string) => {
-            io.to(`user:${recId}`).emit('dm_conversation_updated', {
-              conversationId: channelId,
-              lastMessage: fullMessage
-            });
-            io.to(`user:${recId}`).emit('new_message', fullMessage);
+        // Strip attachments if sender is guest
+        if (isGuest && attachments && attachments.length > 0) {
+          attachments = [];
+          socket.emit('toast_notification', {
+            title: 'Batasan Akun Tamu',
+            message: 'Akun tamu tidak dapat mengirim lampiran file/gambar. Tingkatkan akun Anda ke permanen.',
+            variant: 'error'
           });
         }
+
+        if (!content && attachments.length === 0 && !stickerUrl && !poll) return;
+
+        let replyToMessage: Partial<Message> | undefined;
+        if (replyToId) {
+          try {
+            const originalMsg = await db.getMessageById(replyToId);
+            if (originalMsg) {
+              const author = await db.getUserById(originalMsg.authorId);
+              replyToMessage = {
+                id: originalMsg.id,
+                content: originalMsg.content,
+                authorId: originalMsg.authorId,
+                author: author ? (({ passwordHash: _, ...safe }) => safe)(author) : undefined
+              };
+            }
+          } catch (e) {
+            console.warn('Error fetching replyToMessage:', e);
+          }
+        }
+
+        const newMessage: Message = {
+          id: `msg_${uuidv4()}`,
+          channelId,
+          authorId: userId,
+          content: content ? content.trim() : '',
+          attachments,
+          stickerUrl,
+          replyToId,
+          replyToMessage,
+          reactions: [],
+          poll,
+          linkPreviews,
+          isPinned: false,
+          isEdited: false,
+          createdAt: new Date().toISOString()
+        };
+
+        await db.addMessage(newMessage);
+
+        const safeAuthor = authorUser ? (({ passwordHash: _, ...safe }) => safe)(authorUser) : undefined;
+        const fullMessage = { ...newMessage, author: safeAuthor };
+
+        io.to(`channel:${channelId}`).emit('new_message', fullMessage);
+
+        // If DM conversation, update lastMessageAt and notify recipients
+        if (channelId.startsWith('dm_') || channelId.startsWith('group_dm_')) {
+          const convo = await db.getConversationById(channelId);
+          if (convo) {
+            const rIds = (convo as any).recipientIds || (convo as any).participantIds || [];
+            await db.updateConversation(channelId, { lastMessageAt: newMessage.createdAt } as any);
+            rIds.forEach((recId: string) => {
+              io.to(`user:${recId}`).emit('dm_conversation_updated', {
+                conversationId: channelId,
+                lastMessage: fullMessage
+              });
+              io.to(`user:${recId}`).emit('new_message', fullMessage);
+            });
+          }
+        }
+      } catch (err: any) {
+        console.error('Error handling send_message:', err);
       }
     });
 
