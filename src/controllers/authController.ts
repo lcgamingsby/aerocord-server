@@ -51,12 +51,23 @@ export const checkAvailability = async (req: AuthenticatedRequest, res: Response
 };
 
 import { getBlankSilhouetteAvatar } from '../constants/avatar';
+import { sendVerificationEmail } from '../services/emailService';
 
-export const register = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+// In-memory store for Pending Registrations: email -> { username, email, passwordHash, avatar, code, expiresAt }
+const pendingRegistrations = new Map<string, { 
+  username: string; 
+  email: string; 
+  passwordHash: string; 
+  avatar: string; 
+  code: string; 
+  expiresAt: number; 
+}>();
+
+export const sendRegistrationOTP = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const { username, email, password, avatar } = req.body;
 
   if (!username || !email || !password) {
-    res.status(400).json({ error: 'Username, email, and password are required.' });
+    res.status(400).json({ error: 'Username, email, dan password wajib diisi.' });
     return;
   }
 
@@ -77,27 +88,108 @@ export const register = async (req: AuthenticatedRequest, res: Response): Promis
   const existingUsername = await db.getUserByUsername(cleanUsername);
   if (existingUsername) { res.status(409).json({ error: 'Username sudah digunakan. Silakan pilih username lain.' }); return; }
 
-  const discriminator = Math.floor(1000 + Math.random() * 9000).toString();
   const salt = bcrypt.genSaltSync(10);
   const passwordHash = bcrypt.hashSync(password, salt);
-
   const userAvatar = avatar || getBlankSilhouetteAvatar(cleanUsername);
 
-  const newUser: User = {
-    id: `user_${uuidv4()}`,
+  // Generate 6-digit random OTP
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+  // Save to pending registrations for 10 minutes
+  pendingRegistrations.set(cleanEmail, {
     username: cleanUsername,
-    discriminator,
     email: cleanEmail,
     passwordHash,
     avatar: userAvatar,
+    code,
+    expiresAt: Date.now() + 10 * 60 * 1000
+  });
+
+  // Send real email via SMTP
+  const emailRes = await sendVerificationEmail({
+    to: cleanEmail,
+    username: cleanUsername,
+    code
+  });
+
+  if (!emailRes.success) {
+    // If SMTP is not configured or fails, let client know
+    res.status(500).json({ 
+      error: emailRes.error || 'Gagal mengirim email verifikasi ke alamat Anda.' 
+    });
+    return;
+  }
+
+  res.json({
+    success: true,
+    message: `Kode verifikasi 6-digit telah dikirim ke ${cleanEmail}. Silakan periksa kotak masuk atau folder spam Anda.`,
+    email: cleanEmail
+  });
+};
+
+export const register = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const { email, code, username, password, avatar } = req.body;
+
+  if (!email || !code) {
+    res.status(400).json({ error: 'Email dan kode verifikasi 6-digit wajib diisi.' });
+    return;
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanCode = code.trim();
+
+  const pending = pendingRegistrations.get(cleanEmail);
+
+  if (!pending) {
+    res.status(400).json({ error: 'Sesi pendaftaran tidak ditemukan atau telah kedaluwarsa. Silakan kirim ulang kode verifikasi.' });
+    return;
+  }
+
+  if (Date.now() > pending.expiresAt) {
+    pendingRegistrations.delete(cleanEmail);
+    res.status(400).json({ error: 'Kode verifikasi telah kedaluwarsa (10 menit). Silakan kirim ulang kode verifikasi baru.' });
+    return;
+  }
+
+  if (pending.code !== cleanCode) {
+    res.status(400).json({ error: 'Kode verifikasi yang Anda masukkan salah. Silakan periksa kembali email Anda.' });
+    return;
+  }
+
+  // Double check availability before creating
+  const existingEmail = await db.getUserByEmail(cleanEmail);
+  if (existingEmail) { 
+    pendingRegistrations.delete(cleanEmail);
+    res.status(409).json({ error: 'Email sudah terdaftar. Silakan masuk ke akun Anda.' }); 
+    return; 
+  }
+
+  const existingUsername = await db.getUserByUsername(pending.username);
+  if (existingUsername) { 
+    pendingRegistrations.delete(cleanEmail);
+    res.status(409).json({ error: 'Username sudah digunakan oleh akun lain. Silakan daftar kembali dengan username baru.' }); 
+    return; 
+  }
+
+  const discriminator = Math.floor(1000 + Math.random() * 9000).toString();
+
+  const newUser: User = {
+    id: `user_${uuidv4()}`,
+    username: pending.username,
+    discriminator,
+    email: cleanEmail,
+    passwordHash: pending.passwordHash,
+    avatar: pending.avatar,
     bannerColor: '#5865F2',
     status: 'online',
     customStatus: '',
     bio: '',
+    emailVerified: true,
     createdAt: new Date().toISOString()
   };
 
   await db.addUser(newUser);
+  pendingRegistrations.delete(cleanEmail);
 
   // Auto-join default server if it exists
   const mainServer = await db.getServerById('srv_main');
@@ -113,7 +205,7 @@ export const register = async (req: AuthenticatedRequest, res: Response): Promis
 
   const token = generateToken(newUser);
   const { passwordHash: _, ...safeUser } = newUser;
-  res.status(201).json({ token, user: safeUser });
+  res.status(201).json({ token, user: safeUser, message: 'Pendaftaran berhasil dan akun Anda telah terverifikasi!' });
 };
 
 export const login = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

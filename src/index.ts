@@ -70,6 +70,7 @@ const router = express.Router();
 
 // Auth Routes (with brute-force & SQL injection protection)
 router.get('/auth/check', authController.checkAvailability);
+router.post('/auth/register/send-otp', authRateLimiter, authController.sendRegistrationOTP);
 router.post('/auth/register', authRateLimiter, authController.register);
 router.post('/auth/login', authRateLimiter, authController.login);
 router.post('/auth/2fa/verify', authRateLimiter, authController.verify2FALogin);
