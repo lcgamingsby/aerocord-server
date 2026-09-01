@@ -130,6 +130,12 @@ export const sendRegistrationOTP = async (req: AuthenticatedRequest, res: Respon
 export const register = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const { email, code, username, password, avatar } = req.body;
 
+  // If code is not provided but username & password are, automatically route to sendRegistrationOTP
+  if (!code && username && email && password) {
+    await sendRegistrationOTP(req, res);
+    return;
+  }
+
   if (!email || !code) {
     res.status(400).json({ error: 'Email dan kode verifikasi 6-digit wajib diisi.' });
     return;
