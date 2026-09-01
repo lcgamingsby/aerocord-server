@@ -128,90 +128,99 @@ export const sendRegistrationOTP = async (req: AuthenticatedRequest, res: Respon
 };
 
 export const register = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const { email, code, username, password, avatar } = req.body;
+  try {
+    const { email, code, username, password, avatar } = req.body;
 
-  // If code is not provided but username & password are, automatically route to sendRegistrationOTP
-  if (!code && username && email && password) {
-    await sendRegistrationOTP(req, res);
-    return;
-  }
+    // If code is not provided but username & password are, automatically route to sendRegistrationOTP
+    if (!code && username && email && password) {
+      await sendRegistrationOTP(req, res);
+      return;
+    }
 
-  if (!email || !code) {
-    res.status(400).json({ error: 'Email dan kode verifikasi 6-digit wajib diisi.' });
-    return;
-  }
+    if (!email || !code) {
+      res.status(400).json({ error: 'Email dan kode verifikasi 6-digit wajib diisi.' });
+      return;
+    }
 
-  const cleanEmail = email.trim().toLowerCase();
-  const cleanCode = code.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanCode = code.trim();
 
-  const pending = pendingRegistrations.get(cleanEmail);
+    const pending = pendingRegistrations.get(cleanEmail);
 
-  if (!pending) {
-    res.status(400).json({ error: 'Sesi pendaftaran tidak ditemukan atau telah kedaluwarsa. Silakan kirim ulang kode verifikasi.' });
-    return;
-  }
+    if (!pending) {
+      res.status(400).json({ error: 'Sesi pendaftaran tidak ditemukan atau telah kedaluwarsa. Silakan kirim ulang kode verifikasi.' });
+      return;
+    }
 
-  if (Date.now() > pending.expiresAt) {
+    if (Date.now() > pending.expiresAt) {
+      pendingRegistrations.delete(cleanEmail);
+      res.status(400).json({ error: 'Kode verifikasi telah kedaluwarsa (10 menit). Silakan kirim ulang kode verifikasi baru.' });
+      return;
+    }
+
+    if (pending.code !== cleanCode) {
+      res.status(400).json({ error: 'Kode verifikasi yang Anda masukkan salah. Silakan periksa kembali email Anda.' });
+      return;
+    }
+
+    // Double check availability before creating
+    const existingEmail = await db.getUserByEmail(cleanEmail);
+    if (existingEmail) { 
+      pendingRegistrations.delete(cleanEmail);
+      res.status(409).json({ error: 'Email sudah terdaftar. Silakan masuk ke akun Anda.' }); 
+      return; 
+    }
+
+    const existingUsername = await db.getUserByUsername(pending.username);
+    if (existingUsername) { 
+      pendingRegistrations.delete(cleanEmail);
+      res.status(409).json({ error: 'Username sudah digunakan oleh akun lain. Silakan daftar kembali dengan username baru.' }); 
+      return; 
+    }
+
+    const discriminator = Math.floor(1000 + Math.random() * 9000).toString();
+
+    const newUser: User = {
+      id: `user_${uuidv4()}`,
+      username: pending.username,
+      discriminator,
+      email: cleanEmail,
+      passwordHash: pending.passwordHash,
+      avatar: pending.avatar,
+      bannerColor: '#5865F2',
+      status: 'online',
+      customStatus: '',
+      bio: '',
+      emailVerified: true,
+      createdAt: new Date().toISOString()
+    };
+
+    await db.addUser(newUser);
     pendingRegistrations.delete(cleanEmail);
-    res.status(400).json({ error: 'Kode verifikasi telah kedaluwarsa (10 menit). Silakan kirim ulang kode verifikasi baru.' });
-    return;
+
+    // Auto-join default server if it exists
+    try {
+      const mainServer = await db.getServerById('srv_main');
+      if (mainServer) {
+        const updatedMembers = [...(mainServer.members || []), {
+          userId: newUser.id,
+          serverId: 'srv_main',
+          roleIds: ['role_member'],
+          joinedAt: new Date().toISOString()
+        }];
+        await db.updateServer('srv_main', { members: updatedMembers });
+      }
+    } catch (srvErr) {
+      console.warn('Auto-joining default server warning:', srvErr);
+    }
+
+    const token = generateToken(newUser);
+    const { passwordHash: _, ...safeUser } = newUser;
+    res.status(201).json({ token, user: safeUser, message: 'Pendaftaran berhasil dan akun Anda telah terverifikasi!' });
+  } catch (err: any) {
+    console.error('[Register Error]', err);
+    res.status(500).json({ error: err.message || 'Terjadi kesalahan pada server saat membuat akun.' });
   }
-
-  if (pending.code !== cleanCode) {
-    res.status(400).json({ error: 'Kode verifikasi yang Anda masukkan salah. Silakan periksa kembali email Anda.' });
-    return;
-  }
-
-  // Double check availability before creating
-  const existingEmail = await db.getUserByEmail(cleanEmail);
-  if (existingEmail) { 
-    pendingRegistrations.delete(cleanEmail);
-    res.status(409).json({ error: 'Email sudah terdaftar. Silakan masuk ke akun Anda.' }); 
-    return; 
-  }
-
-  const existingUsername = await db.getUserByUsername(pending.username);
-  if (existingUsername) { 
-    pendingRegistrations.delete(cleanEmail);
-    res.status(409).json({ error: 'Username sudah digunakan oleh akun lain. Silakan daftar kembali dengan username baru.' }); 
-    return; 
-  }
-
-  const discriminator = Math.floor(1000 + Math.random() * 9000).toString();
-
-  const newUser: User = {
-    id: `user_${uuidv4()}`,
-    username: pending.username,
-    discriminator,
-    email: cleanEmail,
-    passwordHash: pending.passwordHash,
-    avatar: pending.avatar,
-    bannerColor: '#5865F2',
-    status: 'online',
-    customStatus: '',
-    bio: '',
-    emailVerified: true,
-    createdAt: new Date().toISOString()
-  };
-
-  await db.addUser(newUser);
-  pendingRegistrations.delete(cleanEmail);
-
-  // Auto-join default server if it exists
-  const mainServer = await db.getServerById('srv_main');
-  if (mainServer) {
-    const updatedMembers = [...(mainServer.members || []), {
-      userId: newUser.id,
-      serverId: 'srv_main',
-      roleIds: ['role_member'],
-      joinedAt: new Date().toISOString()
-    }];
-    await db.updateServer('srv_main', { members: updatedMembers });
-  }
-
-  const token = generateToken(newUser);
-  const { passwordHash: _, ...safeUser } = newUser;
-  res.status(201).json({ token, user: safeUser, message: 'Pendaftaran berhasil dan akun Anda telah terverifikasi!' });
 };
 
 export const login = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

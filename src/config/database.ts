@@ -62,7 +62,27 @@ class Database {
     const cleanUser = sanitizeObject(user) as any;
     cleanUser._sig = generateIntegritySeal(cleanUser.id + ':' + cleanUser.email);
     const { error } = await supabase.from('users').insert(cleanUser);
-    if (error) throw new Error('Failed to create user: ' + error.message);
+    if (error) {
+      console.warn('addUser insert error:', error.message, '- retrying with core columns');
+      const coreUser = {
+        id: cleanUser.id,
+        username: cleanUser.username,
+        discriminator: cleanUser.discriminator,
+        email: cleanUser.email,
+        passwordHash: cleanUser.passwordHash,
+        avatar: cleanUser.avatar,
+        bannerColor: cleanUser.bannerColor || '#5865F2',
+        status: cleanUser.status || 'online',
+        customStatus: cleanUser.customStatus || '',
+        bio: cleanUser.bio || '',
+        createdAt: cleanUser.createdAt || new Date().toISOString()
+      };
+      const { error: retryError } = await supabase.from('users').insert(coreUser);
+      if (retryError) {
+        console.error('addUser retry error:', retryError);
+        throw new Error('Failed to create user: ' + retryError.message);
+      }
+    }
   }
 
   async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
