@@ -7,36 +7,20 @@ interface SendVerificationEmailOptions {
 }
 
 export const sendVerificationEmail = async ({ to, username, code }: SendVerificationEmailOptions): Promise<{ success: boolean; error?: string }> => {
+  const resendApiKey = process.env.RESEND_API_KEY || (process.env.SMTP_PASS?.startsWith('re_') ? process.env.SMTP_PASS : undefined);
+  const brevoApiKey = process.env.BREVO_API_KEY || (process.env.SMTP_PASS?.startsWith('xkeysib-') ? process.env.SMTP_PASS : undefined);
+
   const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT || '587', 10);
+  const port = parseInt(process.env.SMTP_PORT || '465', 10);
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || (user ? `"AeroCord Verification" <${user}>` : '"AeroCord" <no-reply@aerocord.app>');
+  const from = process.env.SMTP_FROM || (user ? `"AeroCord Verification" <${user}>` : '"AeroCord" <onboarding@resend.dev>');
   const secure = process.env.SMTP_SECURE === 'true' || port === 465;
 
-  if (!host || !user || !pass) {
-    console.warn('[EmailService] SMTP credentials not configured (SMTP_HOST, SMTP_USER, SMTP_PASS). Verification code for', to, 'is:', code);
-    return { 
-      success: false, 
-      error: 'Layanan email SMTP server belum dikonfigurasi di environment variables (SMTP_HOST, SMTP_USER, SMTP_PASS).' 
-    };
-  }
+  const subject = `[AeroCord] ${code} adalah kode verifikasi akun Anda`;
+  const textContent = `Halo ${username},\n\nKode verifikasi pendaftaran akun AeroCord Anda adalah: ${code}\n\nKode ini berlaku selama 10 menit.\nJangan berikan kode ini kepada siapapun.\n\nSalam,\nTim AeroCord`;
 
-  try {
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure,
-      auth: {
-        user,
-        pass,
-      },
-      tls: {
-        rejectUnauthorized: false
-      }
-    });
-
-    const htmlContent = `
+  const htmlContent = `
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -162,22 +146,124 @@ export const sendVerificationEmail = async ({ to, username, code }: SendVerifica
   </div>
 </body>
 </html>
-    `;
+  `;
+
+  // =========================================================================
+  // 1. METHOD 1: Resend HTTPS REST API (Port 443 - 100% Never Timeout)
+  // =========================================================================
+  if (resendApiKey) {
+    try {
+      const fromEmail = process.env.RESEND_FROM || 'AeroCord <onboarding@resend.dev>';
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${resendApiKey.trim()}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: fromEmail,
+          to: [to],
+          subject,
+          html: htmlContent,
+          text: textContent
+        })
+      });
+
+      const data: any = await res.json();
+      if (!res.ok) {
+        console.error('[EmailService:Resend] Error response:', data);
+        return { 
+          success: false, 
+          error: data.message || data.error || 'Gagal mengirim email via Resend API.' 
+        };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('[EmailService:Resend] Fetch error:', err);
+      return { success: false, error: `Gagal mengirim email via Resend: ${err.message}` };
+    }
+  }
+
+  // =========================================================================
+  // 2. METHOD 2: Brevo HTTPS REST API (Port 443 - 100% Never Timeout)
+  // =========================================================================
+  if (brevoApiKey) {
+    try {
+      const senderEmail = user || 'no-reply@aerocord.app';
+      const senderName = 'AeroCord Security';
+      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': brevoApiKey.trim(),
+          'Content-Type': 'application/json',
+          'accept': 'application/json'
+        },
+        body: JSON.stringify({
+          sender: { name: senderName, email: senderEmail },
+          to: [{ email: to, name: username }],
+          subject,
+          htmlContent,
+          textContent
+        })
+      });
+
+      const data: any = await res.json();
+      if (!res.ok) {
+        console.error('[EmailService:Brevo] Error response:', data);
+        return { 
+          success: false, 
+          error: data.message || 'Gagal mengirim email via Brevo API.' 
+        };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('[EmailService:Brevo] Fetch error:', err);
+      return { success: false, error: `Gagal mengirim email via Brevo: ${err.message}` };
+    }
+  }
+
+  // =========================================================================
+  // 3. METHOD 3: Standard SMTP (with Port 465 / 587 and timeout settings)
+  // =========================================================================
+  if (!host || !user || !pass) {
+    console.warn('[EmailService] SMTP credentials not configured (SMTP_HOST, SMTP_USER, SMTP_PASS). Verification code for', to, 'is:', code);
+    return { 
+      success: false, 
+      error: 'Layanan email belum dikonfigurasi. Tambahkan RESEND_API_KEY atau SMTP_HOST & SMTP_PASS di Railway.' 
+    };
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+      auth: {
+        user,
+        pass,
+      },
+      tls: {
+        rejectUnauthorized: false
+      }
+    });
 
     await transporter.sendMail({
       from,
       to,
-      subject: `[AeroCord] ${code} adalah kode verifikasi akun Anda`,
-      text: `Halo ${username},\n\nKode verifikasi pendaftaran akun AeroCord Anda adalah: ${code}\n\nKode ini berlaku selama 10 menit.\nJangan berikan kode ini kepada siapapun.\n\nSalam,\nTim AeroCord`,
+      subject,
+      text: textContent,
       html: htmlContent,
     });
 
     return { success: true };
   } catch (err: any) {
-    console.error('[EmailService] Failed to send email to', to, ':', err);
+    console.error('[EmailService:SMTP] Error sending to', to, ':', err);
     return { 
       success: false, 
-      error: `Gagal mengirim email verifikasi: ${err.message || 'Kesalahan koneksi SMTP'}` 
+      error: `Gagal mengirim email via SMTP: ${err.message || 'Connection timeout. Gunakan port 465 (SSL) atau gunakan RESEND_API_KEY / BREVO_API_KEY.'}` 
     };
   }
 };
