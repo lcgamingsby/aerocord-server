@@ -148,12 +148,21 @@ export const sendVerificationEmail = async ({ to, username, code }: SendVerifica
 </html>
   `;
 
+function extractEmailAddress(str?: string): string | undefined {
+  if (!str) return undefined;
+  const match = str.match(/<([^>]+)>/);
+  if (match) return match[1].trim();
+  if (str.includes('@')) return str.trim();
+  return undefined;
+}
+
   // =========================================================================
   // 1. METHOD 1: Resend HTTPS REST API (Port 443 - 100% Never Timeout)
   // =========================================================================
   if (resendApiKey) {
     try {
-      const fromEmail = process.env.RESEND_FROM || 'AeroCord <onboarding@resend.dev>';
+      const fromEmail = process.env.RESEND_FROM || process.env.SMTP_FROM || 'AeroCord <onboarding@resend.dev>';
+      console.log('[EmailService:Resend] Sending verification email to', to, 'via Resend API...');
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -174,9 +183,10 @@ export const sendVerificationEmail = async ({ to, username, code }: SendVerifica
         console.error('[EmailService:Resend] Error response:', data);
         return { 
           success: false, 
-          error: data.message || data.error || 'Gagal mengirim email via Resend API.' 
+          error: data.message || data.error || 'Gagal mengirim email via Resend API. Periksa RESEND_API_KEY di Railway.' 
         };
       }
+      console.log('[EmailService:Resend] Email successfully sent to', to);
       return { success: true };
     } catch (err: any) {
       console.error('[EmailService:Resend] Fetch error:', err);
@@ -189,8 +199,18 @@ export const sendVerificationEmail = async ({ to, username, code }: SendVerifica
   // =========================================================================
   if (brevoApiKey) {
     try {
-      const senderEmail = user || 'no-reply@aerocord.app';
-      const senderName = 'AeroCord Security';
+      const parsedSenderEmail = extractEmailAddress(process.env.BREVO_SENDER_EMAIL || process.env.SMTP_USER || process.env.SMTP_FROM);
+      
+      if (!parsedSenderEmail) {
+        return {
+          success: false,
+          error: 'Brevo memerlukan variabel SMTP_USER (diisi email akun Brevo Anda) di Railway.'
+        };
+      }
+
+      const senderName = process.env.BREVO_SENDER_NAME || 'AeroCord Security';
+      console.log('[EmailService:Brevo] Sending email to', to, 'from', parsedSenderEmail, 'via Brevo API...');
+
       const res = await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
         headers: {
@@ -199,7 +219,7 @@ export const sendVerificationEmail = async ({ to, username, code }: SendVerifica
           'accept': 'application/json'
         },
         body: JSON.stringify({
-          sender: { name: senderName, email: senderEmail },
+          sender: { name: senderName, email: parsedSenderEmail },
           to: [{ email: to, name: username }],
           subject,
           htmlContent,
@@ -210,11 +230,13 @@ export const sendVerificationEmail = async ({ to, username, code }: SendVerifica
       const data: any = await res.json();
       if (!res.ok) {
         console.error('[EmailService:Brevo] Error response:', data);
+        const errMsg = data.message || (typeof data === 'string' ? data : JSON.stringify(data));
         return { 
           success: false, 
-          error: data.message || 'Gagal mengirim email via Brevo API.' 
+          error: `Brevo API: ${errMsg} (Pastikan ${parsedSenderEmail} adalah email terdaftar di Brevo)` 
         };
       }
+      console.log('[EmailService:Brevo] Email successfully sent to', to, 'Message ID:', data.messageId);
       return { success: true };
     } catch (err: any) {
       console.error('[EmailService:Brevo] Fetch error:', err);
