@@ -337,6 +337,17 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       }
     });
 
+    // Voice Chat Soundboard Broadcast
+    socket.on('voice_soundboard', (data: { channelId: string; soundId: string; soundName?: string }) => {
+      const { channelId, soundId, soundName } = data;
+      if (!channelId) return;
+      io.to(`voice:${channelId}`).emit('voice_soundboard_played', {
+        userId,
+        soundId,
+        soundName: soundName || soundId
+      });
+    });
+
     socket.on('call_user', async (data: { targetUserId: string; conversationId: string; isVideo?: boolean }) => {
       const { targetUserId, conversationId, isVideo = false } = data;
       const caller = await db.getUserById(userId);
