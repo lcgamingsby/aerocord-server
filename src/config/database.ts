@@ -84,13 +84,16 @@ class Database {
       }
     }
   }
-
   async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
     const cleanUpdates = sanitizeObject(updates) as any;
-    // Recalculate signature after update
+    Object.keys(cleanUpdates).forEach(key => {
+      if (cleanUpdates[key] === undefined) {
+        delete cleanUpdates[key];
+      }
+    });
+
     const existingUser = await this.getUserById(id);
     if (!existingUser) return undefined;
-    const merged = { ...existingUser, ...cleanUpdates };
     cleanUpdates._sig = generateIntegritySeal(id + ':' + (cleanUpdates.email || existingUser.email));
 
     const { data, error } = await supabase
@@ -99,7 +102,24 @@ class Database {
       .eq('id', id)
       .select()
       .single();
-    if (error) { console.error('updateUser error:', error); return undefined; }
+    if (error) {
+      console.warn('updateUser error:', error.message, '- retrying with core columns');
+      const safeUpdates: any = { ...cleanUpdates };
+      delete safeUpdates._sig;
+      delete safeUpdates.failedLoginAttempts;
+      delete safeUpdates.lockedUntil;
+      const { data: retryData, error: retryError } = await supabase
+        .from('users')
+        .update(safeUpdates)
+        .eq('id', id)
+        .select()
+        .single();
+      if (retryError) {
+        console.error('updateUser retry error:', retryError);
+        return undefined;
+      }
+      return retryData as User;
+    }
     return data as User;
   }
 

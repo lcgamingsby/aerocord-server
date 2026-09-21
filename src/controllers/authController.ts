@@ -413,7 +413,11 @@ export const changePassword = async (req: AuthenticatedRequest, res: Response): 
   }
   const salt = bcrypt.genSaltSync(10);
   const passwordHash = bcrypt.hashSync(newPassword, salt);
-  await db.updateUser(user.id, { passwordHash, failedLoginAttempts: 0, lockedUntil: undefined });
+  const updated = await db.updateUser(user.id, { passwordHash });
+  if (!updated) {
+    res.status(500).json({ error: 'Gagal memperbarui password di database. Silakan coba lagi.' });
+    return;
+  }
   res.json({ success: true, message: 'Password berhasil diperbarui dengan aman!' });
 };
 
