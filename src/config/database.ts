@@ -23,6 +23,29 @@ import { supabase } from './supabase';
  * the application level for sensitive fields (passwords, 2FA secrets).
  * =====================================================================
  */
+interface CacheEntry<T> {
+  data: T;
+  expiresAt: number;
+}
+
+const CACHE_TTL_MS = 60000; // 60 seconds TTL
+const userCacheById = new Map<string, CacheEntry<User>>();
+const userCacheByEmail = new Map<string, CacheEntry<User>>();
+const userCacheByUsername = new Map<string, CacheEntry<User>>();
+const serverCacheById = new Map<string, CacheEntry<Server>>();
+
+function invalidateUserCache(user?: Partial<User>) {
+  if (!user) return;
+  if (user.id) userCacheById.delete(user.id);
+  if (user.email) userCacheByEmail.delete(user.email.toLowerCase());
+  if (user.username) userCacheByUsername.delete(user.username.toLowerCase());
+}
+
+function invalidateServerCache(serverId?: string) {
+  if (!serverId) return;
+  serverCacheById.delete(serverId);
+}
+
 class Database {
   // ========== USERS ==========
 
@@ -33,32 +56,59 @@ class Database {
   }
 
   async getUserById(id: string): Promise<User | undefined> {
+    const cached = userCacheById.get(id);
+    if (cached && Date.now() < cached.expiresAt) return cached.data;
+
     const { data, error } = await supabase.from('users').select('*').eq('id', id).single();
     if (error || !data) return undefined;
-    return data as User;
+    const user = data as User;
+    const entry = { data: user, expiresAt: Date.now() + CACHE_TTL_MS };
+    userCacheById.set(user.id, entry);
+    if (user.email) userCacheByEmail.set(user.email.toLowerCase(), entry);
+    if (user.username) userCacheByUsername.set(user.username.toLowerCase(), entry);
+    return user;
   }
 
   async getUserByEmail(email: string): Promise<User | undefined> {
+    const cleanEmail = email.trim().toLowerCase();
+    const cached = userCacheByEmail.get(cleanEmail);
+    if (cached && Date.now() < cached.expiresAt) return cached.data;
+
     const { data, error } = await supabase
       .from('users')
       .select('*')
-      .ilike('email', email)
+      .ilike('email', cleanEmail)
       .single();
     if (error || !data) return undefined;
-    return data as User;
+    const user = data as User;
+    const entry = { data: user, expiresAt: Date.now() + CACHE_TTL_MS };
+    userCacheById.set(user.id, entry);
+    userCacheByEmail.set(cleanEmail, entry);
+    if (user.username) userCacheByUsername.set(user.username.toLowerCase(), entry);
+    return user;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
+    const cleanUsername = username.trim().toLowerCase();
+    const cached = userCacheByUsername.get(cleanUsername);
+    if (cached && Date.now() < cached.expiresAt) return cached.data;
+
     const { data, error } = await supabase
       .from('users')
       .select('*')
-      .ilike('username', username)
+      .ilike('username', cleanUsername)
       .single();
     if (error || !data) return undefined;
-    return data as User;
+    const user = data as User;
+    const entry = { data: user, expiresAt: Date.now() + CACHE_TTL_MS };
+    userCacheById.set(user.id, entry);
+    if (user.email) userCacheByEmail.set(user.email.toLowerCase(), entry);
+    userCacheByUsername.set(cleanUsername, entry);
+    return user;
   }
 
   async addUser(user: User): Promise<void> {
+    invalidateUserCache(user);
     const cleanUser = sanitizeObject(user) as any;
     cleanUser._sig = generateIntegritySeal(cleanUser.id + ':' + cleanUser.email);
     const { error } = await supabase.from('users').insert(cleanUser);
@@ -84,7 +134,9 @@ class Database {
       }
     }
   }
+
   async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    invalidateUserCache({ id, ...updates });
     const cleanUpdates = sanitizeObject(updates) as any;
     Object.keys(cleanUpdates).forEach(key => {
       if (cleanUpdates[key] === undefined) {
@@ -118,12 +170,15 @@ class Database {
         console.error('updateUser retry error:', retryError);
         return undefined;
       }
+      if (retryData) invalidateUserCache(retryData as User);
       return retryData as User;
     }
+    if (data) invalidateUserCache(data as User);
     return data as User;
   }
 
   async deleteUser(userId: string): Promise<void> {
+    invalidateUserCache({ id: userId });
     // Remove user from all server member lists first
     const servers = await this.getServers();
     for (const server of servers) {
@@ -138,6 +193,10 @@ class Database {
   }
 
   async resetDatabase(): Promise<void> {
+    userCacheById.clear();
+    userCacheByEmail.clear();
+    userCacheByUsername.clear();
+    serverCacheById.clear();
     // Clear all data
     await supabase.from('messages').delete().neq('id', '');
     await supabase.from('conversations').delete().neq('id', '');
@@ -192,9 +251,14 @@ class Database {
   }
 
   async getServerById(id: string): Promise<Server | undefined> {
+    const cached = serverCacheById.get(id);
+    if (cached && Date.now() < cached.expiresAt) return cached.data;
+
     const { data, error } = await supabase.from('servers').select('*').eq('id', id).single();
     if (error || !data) return undefined;
-    return data as Server;
+    const srv = data as Server;
+    serverCacheById.set(id, { data: srv, expiresAt: Date.now() + CACHE_TTL_MS });
+    return srv;
   }
 
   async getServerByInvite(code: string): Promise<Server | undefined> {
@@ -208,11 +272,13 @@ class Database {
   }
 
   async addServer(server: Server): Promise<void> {
+    invalidateServerCache(server.id);
     const { error } = await supabase.from('servers').insert(server);
     if (error) throw new Error('Failed to create server: ' + error.message);
   }
 
   async updateServer(id: string, updates: Partial<Server>): Promise<Server | undefined> {
+    invalidateServerCache(id);
     const { data, error } = await supabase
       .from('servers')
       .update(updates)
@@ -220,10 +286,12 @@ class Database {
       .select()
       .single();
     if (error) { console.error('updateServer error:', error); return undefined; }
+    if (data) invalidateServerCache(id);
     return data as Server;
   }
 
   async deleteServer(id: string): Promise<void> {
+    invalidateServerCache(id);
     const server = await this.getServerById(id);
     if (server) {
       const channelIds = server.channels.map(c => c.id);

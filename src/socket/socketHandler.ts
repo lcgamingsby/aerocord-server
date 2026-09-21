@@ -338,13 +338,14 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
     });
 
     // Voice Chat Soundboard Broadcast
-    socket.on('voice_soundboard', (data: { channelId: string; soundId: string; soundName?: string }) => {
-      const { channelId, soundId, soundName } = data;
+    socket.on('voice_soundboard', (data: { channelId: string; soundId?: string; soundName?: string; soundUrl?: string }) => {
+      const { channelId, soundId, soundName, soundUrl } = data;
       if (!channelId) return;
       io.to(`voice:${channelId}`).emit('voice_soundboard_played', {
         userId,
-        soundId,
-        soundName: soundName || soundId
+        soundId: soundId || 'custom',
+        soundName: soundName || 'Custom Sound',
+        soundUrl
       });
     });
 
