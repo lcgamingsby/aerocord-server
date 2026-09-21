@@ -51,7 +51,13 @@ export const checkAvailability = async (req: AuthenticatedRequest, res: Response
 };
 
 import { getBlankSilhouetteAvatar } from '../constants/avatar';
-import { sendVerificationEmail } from '../services/emailService';
+import { sendVerificationEmail, sendPasswordResetEmail } from '../services/emailService';
+
+// In-memory stores for Forgot Password
+// email -> { userId, code, expiresAt }
+const passwordResetOTPs = new Map<string, { userId: string; username: string; code: string; expiresAt: number }>();
+// resetToken (UUID) -> { userId, expiresAt }
+const passwordResetTokens = new Map<string, { userId: string; expiresAt: number }>();
 
 // In-memory store for Pending Registrations: email -> { username, email, passwordHash, avatar, code, expiresAt }
 const pendingRegistrations = new Map<string, { 
@@ -596,4 +602,128 @@ export const searchUsers = async (req: AuthenticatedRequest, res: Response): Pro
     .slice(0, 10)
     .map(u => { const { passwordHash: _, ...safe } = u; return safe; });
   res.json({ users: results });
+};
+
+// ============================================================
+// FORGOT PASSWORD — Step 1: Send OTP
+// ============================================================
+export const sendPasswordResetOTP = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const { email } = req.body;
+  if (!email || typeof email !== 'string') {
+    res.status(400).json({ error: 'Email wajib diisi.' });
+    return;
+  }
+  const cleanEmail = email.trim().toLowerCase();
+
+  // Always respond with success to avoid user enumeration
+  const user = await db.getUserByEmail(cleanEmail);
+  if (!user) {
+    // Silently succeed — don't reveal if email exists
+    res.json({ success: true, message: 'Jika email terdaftar, kode reset akan dikirim segera.' });
+    return;
+  }
+
+  // Rate-limit: max 1 OTP per 60 seconds per email
+  const existing = passwordResetOTPs.get(cleanEmail);
+  if (existing && existing.expiresAt - (10 * 60 * 1000) + (60 * 1000) > Date.now()) {
+    res.status(429).json({ error: 'Harap tunggu 60 detik sebelum meminta kode baru.' });
+    return;
+  }
+
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  passwordResetOTPs.set(cleanEmail, {
+    userId: user.id,
+    username: user.username,
+    code,
+    expiresAt: Date.now() + 10 * 60 * 1000 // 10 minutes
+  });
+
+  const result = await sendPasswordResetEmail({ to: cleanEmail, username: user.username, code });
+  if (!result.success) {
+    console.error('[ForgotPassword] Email send failed:', result.error);
+    res.status(500).json({ error: `Gagal mengirim email reset: ${result.error}` });
+    return;
+  }
+
+  res.json({ success: true, message: 'Kode reset password telah dikirim ke email Anda. Berlaku 10 menit.' });
+};
+
+// ============================================================
+// FORGOT PASSWORD — Step 2: Verify OTP → get resetToken
+// ============================================================
+export const verifyPasswordResetOTP = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const { email, code } = req.body;
+  if (!email || !code) {
+    res.status(400).json({ error: 'Email dan kode OTP wajib diisi.' });
+    return;
+  }
+  const cleanEmail = email.trim().toLowerCase();
+  const entry = passwordResetOTPs.get(cleanEmail);
+
+  if (!entry) {
+    res.status(400).json({ error: 'Kode tidak valid atau sudah kedaluwarsa. Minta kode baru.' });
+    return;
+  }
+  if (Date.now() > entry.expiresAt) {
+    passwordResetOTPs.delete(cleanEmail);
+    res.status(400).json({ error: 'Kode sudah kedaluwarsa. Silakan minta kode baru.' });
+    return;
+  }
+  if (entry.code !== code.trim()) {
+    res.status(400).json({ error: 'Kode OTP salah. Periksa kembali email Anda.' });
+    return;
+  }
+
+  // OTP valid — delete it and issue a short-lived reset token
+  passwordResetOTPs.delete(cleanEmail);
+  const resetToken = uuidv4();
+  passwordResetTokens.set(resetToken, {
+    userId: entry.userId,
+    expiresAt: Date.now() + 5 * 60 * 1000 // 5 minutes
+  });
+
+  res.json({ success: true, resetToken, message: 'Kode verifikasi valid. Silakan buat password baru.' });
+};
+
+// ============================================================
+// FORGOT PASSWORD — Step 3: Reset Password with token
+// ============================================================
+export const resetPassword = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const { resetToken, newPassword } = req.body;
+  if (!resetToken || !newPassword) {
+    res.status(400).json({ error: 'Reset token dan password baru wajib diisi.' });
+    return;
+  }
+
+  const entry = passwordResetTokens.get(resetToken);
+  if (!entry) {
+    res.status(400).json({ error: 'Token tidak valid atau sudah kedaluwarsa. Ulangi proses dari awal.' });
+    return;
+  }
+  if (Date.now() > entry.expiresAt) {
+    passwordResetTokens.delete(resetToken);
+    res.status(400).json({ error: 'Token sudah kedaluwarsa. Ulangi proses dari awal.' });
+    return;
+  }
+
+  // Validate password strength
+  if (newPassword.length < 8) { res.status(400).json({ error: 'Password minimal 8 karakter.' }); return; }
+  if (!/[A-Z]/.test(newPassword)) { res.status(400).json({ error: 'Password harus mengandung minimal 1 huruf besar.' }); return; }
+  if (!/[a-z]/.test(newPassword)) { res.status(400).json({ error: 'Password harus mengandung minimal 1 huruf kecil.' }); return; }
+  if (!/[0-9]/.test(newPassword)) { res.status(400).json({ error: 'Password harus mengandung minimal 1 angka.' }); return; }
+  if (!/[!@#$%^&*()_+\-=[\]{};':"|,.<>\/?]/.test(newPassword)) { res.status(400).json({ error: 'Password harus mengandung minimal 1 simbol khusus.' }); return; }
+
+  const salt = bcrypt.genSaltSync(10);
+  const passwordHash = bcrypt.hashSync(newPassword, salt);
+
+  const updated = await db.updateUser(entry.userId, { passwordHash });
+  if (!updated) {
+    res.status(500).json({ error: 'Gagal memperbarui password. Coba lagi.' });
+    return;
+  }
+
+  // Consume token
+  passwordResetTokens.delete(resetToken);
+
+  res.json({ success: true, message: 'Password berhasil diperbarui! Silakan login dengan password baru Anda.' });
 };

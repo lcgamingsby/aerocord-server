@@ -289,3 +289,138 @@ function extractEmailAddress(str?: string): string | undefined {
     };
   }
 };
+
+// ============================================================
+// PASSWORD RESET EMAIL
+// ============================================================
+
+interface SendPasswordResetEmailOptions {
+  to: string;
+  username: string;
+  code: string;
+}
+
+export const sendPasswordResetEmail = async ({ to, username, code }: SendPasswordResetEmailOptions): Promise<{ success: boolean; error?: string }> => {
+  const resendApiKey = process.env.RESEND_API_KEY || (process.env.SMTP_PASS?.startsWith('re_') ? process.env.SMTP_PASS : undefined);
+  const brevoApiKey = process.env.BREVO_API_KEY || (process.env.SMTP_PASS?.startsWith('xkeysib-') ? process.env.SMTP_PASS : undefined);
+
+  const host = process.env.SMTP_HOST;
+  const port = parseInt(process.env.SMTP_PORT || '465', 10);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const from = process.env.SMTP_FROM || (user ? `"AeroCord Security" <${user}>` : '"AeroCord" <onboarding@resend.dev>');
+  const secure = process.env.SMTP_SECURE === 'true' || port === 465;
+
+  const subject = `[AeroCord] ${code} — Kode Reset Password Anda`;
+  const textContent = `Halo ${username},\n\nKami menerima permintaan reset password untuk akun AeroCord Anda.\n\nKode verifikasi reset password Anda adalah: ${code}\n\nKode ini berlaku selama 10 menit.\nJangan berikan kode ini kepada siapapun.\n\nJika Anda tidak meminta reset password, abaikan email ini. Akun Anda tetap aman.\n\nSalam,\nTim Keamanan AeroCord`;
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reset Password AeroCord</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #0b0c10; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #e2e8f0; }
+    .container { max-width: 520px; margin: 40px auto; background-color: #13161f; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; overflow: hidden; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5); }
+    .header { background: linear-gradient(135deg, #dc2626 0%, #f97316 100%); padding: 30px 24px; text-align: center; }
+    .header h1 { margin: 0; font-size: 24px; font-weight: 900; letter-spacing: -0.5px; color: #ffffff; }
+    .header p { margin: 6px 0 0 0; font-size: 13px; color: rgba(255, 255, 255, 0.9); }
+    .content { padding: 32px 28px; }
+    .greeting { font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 12px; }
+    .message { font-size: 14px; line-height: 1.6; color: #94a3b8; margin-bottom: 24px; }
+    .code-box { background-color: #0b0c10; border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 16px; padding: 20px; text-align: center; margin-bottom: 24px; }
+    .code-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #f87171; margin-bottom: 8px; }
+    .code-value { font-family: 'SF Mono', Consolas, Monaco, monospace; font-size: 32px; font-weight: 900; letter-spacing: 6px; color: #ffffff; }
+    .expiry { font-size: 12px; color: #64748b; margin-top: 8px; }
+    .warning-box { background-color: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; font-size: 13px; color: #fca5a5; line-height: 1.5; }
+    .footer { border-top: 1px solid rgba(255, 255, 255, 0.05); padding: 20px 28px; background-color: #0d0f14; text-align: center; font-size: 12px; color: #64748b; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🔐 AeroCord</h1>
+      <p>Permintaan Reset Password</p>
+    </div>
+    <div class="content">
+      <div class="greeting">Halo ${username},</div>
+      <div class="message">
+        Kami menerima permintaan untuk mereset password akun AeroCord Anda. Masukkan kode verifikasi 6-digit berikut untuk melanjutkan proses reset:
+      </div>
+      <div class="code-box">
+        <div class="code-label">KODE RESET PASSWORD</div>
+        <div class="code-value">${code}</div>
+        <div class="expiry">⏱ Berlaku selama 10 menit</div>
+      </div>
+      <div class="warning-box">
+        ⚠️ <strong>Penting:</strong> Jangan bagikan kode ini kepada siapapun. Staf AeroCord tidak akan pernah meminta kode ini. Jika Anda tidak meminta reset password, abaikan email ini — akun Anda tetap aman.
+      </div>
+    </div>
+    <div class="footer">
+      &copy; ${new Date().getFullYear()} AeroCord Platform. Hak cipta dilindungi.<br/>
+      Email ini dikirim karena adanya permintaan reset password untuk akun Anda.
+    </div>
+  </div>
+</body>
+</html>
+  `;
+
+  function extractEmail(str?: string): string | undefined {
+    if (!str) return undefined;
+    const match = str.match(/<([^>]+)>/);
+    if (match) return match[1].trim();
+    if (str.includes('@')) return str.trim();
+    return undefined;
+  }
+
+  // 1. Resend API
+  if (resendApiKey) {
+    try {
+      const fromEmail = process.env.RESEND_FROM || process.env.SMTP_FROM || 'AeroCord <onboarding@resend.dev>';
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${resendApiKey.trim()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: fromEmail, to: [to], subject, html: htmlContent, text: textContent })
+      });
+      const data: any = await res.json();
+      if (!res.ok) return { success: false, error: data.message || 'Gagal mengirim email reset password via Resend.' };
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: `Gagal mengirim email via Resend: ${err.message}` };
+    }
+  }
+
+  // 2. Brevo API
+  if (brevoApiKey) {
+    try {
+      const parsedSenderEmail = extractEmail(process.env.BREVO_SENDER_EMAIL || process.env.SMTP_USER || process.env.SMTP_FROM);
+      if (!parsedSenderEmail) return { success: false, error: 'Brevo memerlukan variabel SMTP_USER.' };
+      const senderName = process.env.BREVO_SENDER_NAME || 'AeroCord Security';
+      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: { 'api-key': brevoApiKey.trim(), 'Content-Type': 'application/json', 'accept': 'application/json' },
+        body: JSON.stringify({ sender: { name: senderName, email: parsedSenderEmail }, to: [{ email: to, name: username }], subject, htmlContent, textContent })
+      });
+      const data: any = await res.json();
+      if (!res.ok) return { success: false, error: `Brevo API: ${data.message || JSON.stringify(data)}` };
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: `Gagal mengirim email via Brevo: ${err.message}` };
+    }
+  }
+
+  // 3. SMTP fallback
+  if (!host || !user || !pass) {
+    console.warn('[EmailService:Reset] SMTP not configured. Reset OTP for', to, 'is:', code);
+    return { success: false, error: 'Layanan email belum dikonfigurasi. Tambahkan RESEND_API_KEY atau BREVO_API_KEY di Railway.' };
+  }
+  try {
+    const transporter = nodemailer.createTransport({ host, port, secure, connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000, auth: { user, pass }, tls: { rejectUnauthorized: false } });
+    await transporter.sendMail({ from, to, subject, text: textContent, html: htmlContent });
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: `Gagal mengirim email via SMTP: ${err.message}` };
+  }
+};

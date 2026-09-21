@@ -93,6 +93,11 @@ router.post('/auth/friends/request', requireAuth, authController.sendFriendReque
 router.post('/auth/friends/respond', requireAuth, authController.respondFriendRequest);
 router.get('/auth/users/search', requireAuth, authController.searchUsers);
 
+// Forgot Password Routes
+router.post('/auth/forgot-password/send-otp', authRateLimiter, authController.sendPasswordResetOTP);
+router.post('/auth/forgot-password/verify-otp', authRateLimiter, authController.verifyPasswordResetOTP);
+router.post('/auth/forgot-password/reset', authRateLimiter, authController.resetPassword);
+
 // Server Routes
 router.get('/servers', requireAuth, serverController.getServers);
 router.post('/servers', requireAuth, serverController.createServer);
