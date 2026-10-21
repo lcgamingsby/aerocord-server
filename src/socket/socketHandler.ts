@@ -307,11 +307,18 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
 
     socket.on('voice_signal', (data: { targetUserId: string; signal: any; channelId: string }) => {
       const { targetUserId, signal, channelId } = data;
-      const targetSockets = userSockets.get(targetUserId);
-      if (targetSockets) {
-        targetSockets.forEach(targetSocketId => {
-          io.to(targetSocketId).emit('voice_signal', { senderUserId: userId, signal, channelId });
-        });
+      const room = voiceRooms.get(channelId);
+      const peerParticipant = room?.get(targetUserId);
+
+      if (peerParticipant && peerParticipant.socketId) {
+        io.to(peerParticipant.socketId).emit('voice_signal', { senderUserId: userId, signal, channelId });
+      } else {
+        const targetSockets = userSockets.get(targetUserId);
+        if (targetSockets) {
+          targetSockets.forEach(targetSocketId => {
+            io.to(targetSocketId).emit('voice_signal', { senderUserId: userId, signal, channelId });
+          });
+        }
       }
     });
 
