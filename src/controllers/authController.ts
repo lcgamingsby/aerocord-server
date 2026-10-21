@@ -2,7 +2,7 @@ import { Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../config/database';
-import { generateToken, AuthenticatedRequest } from '../middleware/auth';
+import { generateToken, revokeToken, AuthenticatedRequest } from '../middleware/auth';
 import { User, FriendRelation } from '../types';
 import { 
   generateBase32Secret, 
@@ -472,6 +472,15 @@ export const guestLogin = async (req: AuthenticatedRequest, res: Response): Prom
 };
 
 export const logout = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  // Revoke JWT token immediately so it can never be used again
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    if (token) {
+      revokeToken(token);
+    }
+  }
+
   if (req.user) {
     if (req.user.isGuest || req.user.id.startsWith('guest_') || req.user.email.endsWith('@guest.aerocord.app')) {
       await db.deleteUser(req.user.id);
