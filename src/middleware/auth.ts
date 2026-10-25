@@ -42,18 +42,23 @@ setInterval(() => {
 
 export const generateToken = (user: User): string => {
   return jwt.sign(
-    { id: user.id, username: user.username, email: user.email },
+    { 
+      id: user.id, 
+      username: user.username, 
+      email: user.email,
+      tokenVersion: user.tokenVersion || 0
+    },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
 };
 
-export const verifyJWTToken = (token: string): { id: string; username: string; email: string } | null => {
+export const verifyJWTToken = (token: string): { id: string; username: string; email: string; tokenVersion?: number } | null => {
   try {
     if (isTokenRevoked(token)) {
       return null;
     }
-    return jwt.verify(token, JWT_SECRET) as { id: string; username: string; email: string };
+    return jwt.verify(token, JWT_SECRET) as { id: string; username: string; email: string; tokenVersion?: number };
   } catch {
     return null;
   }
@@ -80,6 +85,12 @@ export const requireAuth = async (req: AuthenticatedRequest, res: Response, next
   const user = await db.getUserById(decoded.id);
   if (!user) {
     res.status(401).json({ error: 'User not found or deleted.' });
+    return;
+  }
+
+  // Check if token was issued prior to a "logout all devices" action
+  if (user.tokenVersion !== undefined && decoded.tokenVersion !== undefined && decoded.tokenVersion < user.tokenVersion) {
+    res.status(401).json({ error: 'Sesi login telah kedaluwarsa karena akun telah logout dari semua perangkat. Silakan login kembali.' });
     return;
   }
 

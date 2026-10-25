@@ -49,7 +49,19 @@ const corsOptions: cors.CorsOptions = {
   optionsSuccessStatus: 200
 };
 
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false,
+  frameguard: { action: 'deny' }, // Anti-clickjacking (X-Frame-Options: DENY)
+  noSniff: true, // Prevent MIME-type sniffing (X-Content-Type-Options: nosniff)
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  dnsPrefetchControl: { allow: false }
+}));
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
@@ -83,6 +95,7 @@ router.post('/auth/2fa/disable', requireAuth, authController.disable2FA);
 router.post('/auth/change-password', requireAuth, authController.changePassword);
 router.post('/auth/guest', authRateLimiter, authController.guestLogin);
 router.post('/auth/logout', requireAuth, authController.logout);
+router.post('/auth/logout-all', requireAuth, authController.logoutAllDevices);
 router.post('/auth/send-verification', requireAuth, authController.sendVerificationCode);
 router.post('/auth/upgrade-guest', requireAuth, authController.upgradeGuestAccount);
 router.post('/admin/reset-db', authController.resetDatabase);

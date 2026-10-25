@@ -4,8 +4,23 @@ import { v4 as uuidv4 } from 'uuid';
 import { supabase, STORAGE_BUCKET } from '../config/supabase';
 import { Request, Response, NextFunction } from 'express';
 
-// Blacklist dangerous executable extensions for security
-const BLOCKED_EXTENSIONS = ['.exe', '.bat', '.cmd', '.sh', '.vbs', '.msi', '.dll', '.scr', '.com', '.pif'];
+// Comprehensive blacklist of dangerous executable and web-scripting extensions
+const BLOCKED_EXTENSIONS = [
+  '.exe', '.bat', '.cmd', '.sh', '.vbs', '.msi', '.dll', '.scr', '.com', '.pif',
+  '.ps1', '.bin', '.html', '.htm', '.xhtml', '.php', '.phtml', '.php3', '.php4',
+  '.php5', '.phps', '.jsp', '.asp', '.aspx', '.cgi', '.pl', '.svg', '.js', '.mjs'
+];
+
+// Blocked active scripting MIME types (e.g. SVG scripts, executable mime types)
+const BLOCKED_MIMETYPES = [
+  'text/html',
+  'application/javascript',
+  'text/javascript',
+  'image/svg+xml',
+  'application/x-msdownload',
+  'application/x-sh',
+  'application/x-php'
+];
 
 /**
  * Multer using memory storage — file is held in buffer,
@@ -18,8 +33,10 @@ export const uploadMedia = multer({
   },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (BLOCKED_EXTENSIONS.includes(ext)) {
-      cb(new Error('Format file berbahaya tidak diizinkan. Silakan unggah file dokumen, gambar, audio, video, atau arsip.'));
+    const mime = (file.mimetype || '').toLowerCase();
+
+    if (BLOCKED_EXTENSIONS.includes(ext) || BLOCKED_MIMETYPES.includes(mime)) {
+      cb(new Error('Format file tidak diizinkan demi alasan keamanan. Silakan unggah file gambar umum (PNG, JPG, WebP, GIF), audio, video, dokumen, atau arsip zip.'));
     } else {
       cb(null, true);
     }

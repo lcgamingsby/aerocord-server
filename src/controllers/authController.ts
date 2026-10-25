@@ -489,6 +489,28 @@ export const logout = async (req: AuthenticatedRequest, res: Response): Promise<
   res.json({ success: true, message: 'Logged out successfully.' });
 };
 
+export const logoutAllDevices = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  if (!req.user) {
+    res.status(401).json({ error: 'Unauthorized.' });
+    return;
+  }
+
+  // Revoke current token
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    if (token) {
+      revokeToken(token);
+    }
+  }
+
+  // Increment tokenVersion in database to invalidate all active JWTs across all devices
+  const nextVersion = (req.user.tokenVersion || 0) + 1;
+  await db.updateUser(req.user.id, { tokenVersion: nextVersion });
+
+  res.json({ success: true, message: 'Berhasil keluar dari semua perangkat. Semua sesi token lama telah dibatalkan.' });
+};
+
 export const sendVerificationCode = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const { email } = req.body;
   if (!email || !email.includes('@')) { res.status(400).json({ error: 'Alamat email yang valid diperlukan.' }); return; }

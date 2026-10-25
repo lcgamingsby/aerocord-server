@@ -21,6 +21,7 @@ export interface User {
   twoFactorKeyToken?: string;
   failedLoginAttempts?: number;
   lockedUntil?: number;
+  tokenVersion?: number;
   _sig?: string;
   createdAt: string;
 }
