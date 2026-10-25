@@ -79,9 +79,12 @@ CREATE TABLE IF NOT EXISTS messages (
   "replyToId" TEXT,
   "stickerPackId" TEXT,
   "stickerId" TEXT,
+  poll JSONB,
   "createdAt" TIMESTAMPTZ DEFAULT NOW(),
   "editedAt" TIMESTAMPTZ
 );
+
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS poll JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages("channelId");
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages("authorId");

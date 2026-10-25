@@ -85,6 +85,9 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
 
         if (!content && attachments.length === 0 && !stickerUrl && !poll) return;
 
+        // Ensure current socket is joined to channel room
+        socket.join(`channel:${channelId}`);
+
         let replyToMessage: Partial<Message> | undefined;
         if (replyToId) {
           try {
@@ -107,7 +110,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
           id: `msg_${uuidv4()}`,
           channelId,
           authorId: userId,
-          content: content ? content.trim() : '',
+          content: content ? content.trim() : (poll?.question ? `📊 Polling: ${poll.question}` : ''),
           attachments,
           stickerUrl,
           replyToId,
@@ -120,12 +123,14 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
           createdAt: new Date().toISOString()
         };
 
-        await db.addMessage(newMessage);
+        const savedMessage = await db.addMessage(newMessage);
 
         const safeAuthor = authorUser ? (({ passwordHash: _, ...safe }) => safe)(authorUser) : undefined;
-        const fullMessage = { ...newMessage, author: safeAuthor };
+        const fullMessage = { ...savedMessage, author: safeAuthor };
 
         io.to(`channel:${channelId}`).emit('new_message', fullMessage);
+        // Explicitly emit to sender socket to guarantee immediate UI appearance
+        socket.emit('new_message', fullMessage);
 
         // If DM conversation, update lastMessageAt and notify recipients
         if (channelId.startsWith('dm_') || channelId.startsWith('group_dm_')) {
@@ -210,32 +215,42 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
 
     // Interactive Poll Voting
     socket.on('vote_poll', async (data: { messageId: string; optionId: string }) => {
-      const { messageId, optionId } = data;
-      const msg = await db.getMessageById(messageId);
-      if (!msg || !msg.poll || msg.poll.closed) return;
+      try {
+        const { messageId, optionId } = data;
+        const msg = await db.getMessageById(messageId);
+        if (!msg || !msg.poll || msg.poll.closed) return;
 
-      const poll = msg.poll;
-      const isMulti = poll.isMultiChoice || poll.allowMultipleVotes;
+        const poll = msg.poll;
+        const isMulti = poll.isMultiChoice || poll.allowMultipleVotes;
 
-      poll.options = poll.options.map((opt: any) => {
-        const userVoted = opt.votes.includes(userId);
-        if (opt.id === optionId) {
+        poll.options = (poll.options || []).map((opt: any) => {
+          const currentVotes = Array.isArray(opt.votes) ? opt.votes : [];
+          const userVoted = currentVotes.includes(userId);
+
+          if (opt.id === optionId) {
+            return {
+              ...opt,
+              votes: userVoted ? currentVotes.filter((id: string) => id !== userId) : [...currentVotes, userId]
+            };
+          } else if (!isMulti) {
+            // Single choice removes vote from other options
+            return {
+              ...opt,
+              votes: currentVotes.filter((id: string) => id !== userId)
+            };
+          }
           return {
             ...opt,
-            votes: userVoted ? opt.votes.filter((id: string) => id !== userId) : [...opt.votes, userId]
+            votes: currentVotes
           };
-        } else if (!isMulti) {
-          // Single choice removes vote from other options
-          return {
-            ...opt,
-            votes: opt.votes.filter((id: string) => id !== userId)
-          };
-        }
-        return opt;
-      });
+        });
 
-      await db.updateMessage(messageId, { poll });
-      io.to(`channel:${msg.channelId}`).emit('poll_updated', { messageId, poll });
+        await db.updateMessage(messageId, { poll });
+        io.to(`channel:${msg.channelId}`).emit('poll_updated', { messageId, poll });
+        socket.emit('poll_updated', { messageId, poll });
+      } catch (err) {
+        console.error('Error handling vote_poll:', err);
+      }
     });
 
     // Typing Indicators
@@ -349,6 +364,18 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
       const { channelId, soundId, soundName, soundUrl } = data;
       if (!channelId) return;
       io.to(`voice:${channelId}`).emit('voice_soundboard_played', {
+        userId,
+        soundId: soundId || 'custom',
+        soundName: soundName || 'Custom Sound',
+        soundUrl
+      });
+    });
+
+    // Channel / Server Chat Soundboard Broadcast
+    socket.on('channel_soundboard', (data: { channelId: string; soundId?: string; soundName?: string; soundUrl?: string }) => {
+      const { channelId, soundId, soundName, soundUrl } = data;
+      if (!channelId) return;
+      io.to(`channel:${channelId}`).emit('channel_soundboard_played', {
         userId,
         soundId: soundId || 'custom',
         soundName: soundName || 'Custom Sound',

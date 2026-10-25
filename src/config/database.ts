@@ -340,33 +340,90 @@ class Database {
       .order('createdAt', { ascending: true })
       .limit(limit);
     if (error) { console.error('getMessages error:', error); return []; }
-    return (data || []) as Message[];
+    return (data || []).map((m: any) => {
+      // Compatibility: extract poll from embeds if not directly present in column
+      if (!m.poll && Array.isArray(m.embeds)) {
+        const pollEmbed = m.embeds.find((e: any) => e?.type === 'poll');
+        if (pollEmbed?.data) {
+          m.poll = pollEmbed.data;
+        }
+      }
+      return m;
+    }) as Message[];
   }
 
   async getMessageById(id: string): Promise<Message | undefined> {
     const { data, error } = await supabase.from('messages').select('*').eq('id', id).single();
     if (error || !data) return undefined;
-    return data as Message;
+    const msg = data as any;
+    if (!msg.poll && Array.isArray(msg.embeds)) {
+      const pollEmbed = msg.embeds.find((e: any) => e?.type === 'poll');
+      if (pollEmbed?.data) {
+        msg.poll = pollEmbed.data;
+      }
+    }
+    return msg as Message;
   }
 
   async addMessage(msg: Message): Promise<Message> {
     const { replyToMessage, author, ...dbPayload } = msg as any;
-    const { data, error } = await supabase.from('messages').insert(dbPayload).select().single();
+    let { data, error } = await supabase.from('messages').insert(dbPayload).select().single();
+    
+    // Fallback: If "poll" column does not exist yet in Supabase messages table, embed it safely in embeds column
+    if (error && (error.message?.includes('poll') || error.code === '42703' || error.message?.includes('column'))) {
+      console.warn('[Database] messages table missing "poll" column, saving poll inside embeds column fallback');
+      const fallbackPayload = { ...dbPayload };
+      delete fallbackPayload.poll;
+      if (msg.poll) {
+        fallbackPayload.embeds = [{ type: 'poll', data: msg.poll }];
+      }
+      const retryRes = await supabase.from('messages').insert(fallbackPayload).select().single();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
+
     if (error) {
       console.error('addMessage error:', error);
     }
-    return (data as Message) || msg;
+
+    const savedMsg = (data as Message) || msg;
+    if (savedMsg && !savedMsg.poll && msg.poll) {
+      savedMsg.poll = msg.poll;
+    }
+    return savedMsg;
   }
 
   async updateMessage(id: string, updates: Partial<Message>): Promise<Message | undefined> {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('messages')
       .update({ ...updates, editedAt: new Date().toISOString(), isEdited: true })
       .eq('id', id)
       .select()
       .single();
+
+    // Fallback if poll column is not present in table
+    if (error && (error.message?.includes('poll') || error.code === '42703' || error.message?.includes('column'))) {
+      const safeUpdates: any = { ...updates };
+      delete safeUpdates.poll;
+      if (updates.poll) {
+        safeUpdates.embeds = [{ type: 'poll', data: updates.poll }];
+      }
+      const retryRes = await supabase
+        .from('messages')
+        .update({ ...safeUpdates, editedAt: new Date().toISOString(), isEdited: true })
+        .eq('id', id)
+        .select()
+        .single();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
+
     if (error) { console.error('updateMessage error:', error); return undefined; }
-    return data as Message;
+    const updated = data as any;
+    if (updated && !updated.poll && updates.poll) {
+      updated.poll = updates.poll;
+    }
+    return updated as Message;
   }
 
   async deleteMessage(id: string): Promise<boolean> {
