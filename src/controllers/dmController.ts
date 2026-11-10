@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../config/database';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { DirectMessageConversation } from '../types';
+import { getIO, isUserOnline } from '../socket/socketHandler';
 
 export const getConversations = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ error: 'Unauthorized.' }); return; }
@@ -16,7 +17,9 @@ export const getConversations = async (req: AuthenticatedRequest, res: Response)
           const u = await db.getUserById(id);
           if (!u) return null;
           const { passwordHash: _, ...safe } = u;
-          return safe;
+          const online = isUserOnline(id);
+          const effectiveStatus = online ? (safe.status === 'offline' ? 'online' : safe.status) : 'offline';
+          return { ...safe, status: effectiveStatus };
         })
       )).filter(Boolean);
 
@@ -75,8 +78,16 @@ export const createOrGetDM = async (req: AuthenticatedRequest, res: Response): P
       const u = await db.getUserById(id);
       if (!u) return null;
       const { passwordHash: _, ...safe } = u;
-      return safe;
+      const online = isUserOnline(id);
+      const effectiveStatus = online ? (safe.status === 'offline' ? 'online' : safe.status) : 'offline';
+      return { ...safe, status: effectiveStatus };
     }))).filter(Boolean);
+
+    const io = getIO();
+    if (io) {
+      io.to(`user:${targetUserId}`).emit('dm_conversation_updated', { conversationId: savedConvo.id });
+      io.to(`user:${req.user.id}`).emit('dm_conversation_updated', { conversationId: savedConvo.id });
+    }
 
     res.status(201).json({ conversation: { ...savedConvo, recipients } });
   } catch (err: any) {
@@ -111,8 +122,17 @@ export const createGroupDM = async (req: AuthenticatedRequest, res: Response): P
       const u = await db.getUserById(id);
       if (!u) return null;
       const { passwordHash: _, ...safe } = u;
-      return safe;
+      const online = isUserOnline(id);
+      const effectiveStatus = online ? (safe.status === 'offline' ? 'online' : safe.status) : 'offline';
+      return { ...safe, status: effectiveStatus };
     }))).filter(Boolean);
+
+    const io = getIO();
+    if (io) {
+      allRecipients.forEach(uid => {
+        io.to(`user:${uid}`).emit('dm_conversation_updated', { conversationId: savedConvo.id });
+      });
+    }
 
     res.status(201).json({ conversation: { ...savedConvo, recipients } });
   } catch (err: any) {

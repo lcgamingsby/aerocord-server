@@ -20,7 +20,18 @@ const voiceRooms = new Map<string, Map<string, VoiceParticipant>>();
 // Active user sockets: userId -> Set<socketId>
 const userSockets = new Map<string, Set<string>>();
 
+let ioInstance: SocketIOServer | null = null;
+
+export const getIO = (): SocketIOServer | null => ioInstance;
+
+export const isUserOnline = (userId: string): boolean => {
+  const s = userSockets.get(userId);
+  return !!s && s.size > 0;
+};
+
 export const setupSocketHandlers = (io: SocketIOServer): void => {
+  ioInstance = io;
+
   // Middleware for socket authentication (async)
   io.use(async (socket: Socket, next) => {
     const token = socket.handshake.auth.token || socket.handshake.query.token;
@@ -36,7 +47,7 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
     next();
   });
 
-  io.on('connection', (socket: Socket) => {
+  io.on('connection', async (socket: Socket) => {
     const user = socket.data.user;
     const userId = user.id;
 
@@ -47,6 +58,24 @@ export const setupSocketHandlers = (io: SocketIOServer): void => {
     // Update user status to online
     db.updateUser(userId, { status: 'online' }).catch(console.error);
     io.emit('user_presence_change', { userId, status: 'online', customStatus: user.customStatus });
+
+    // Send initial presence list of all currently connected users to the newly connected socket
+    try {
+      const onlineIds = Array.from(userSockets.keys());
+      const initialPresence = await Promise.all(
+        onlineIds.map(async (uid) => {
+          if (uid === userId) {
+            return { userId: uid, status: 'online' as UserStatus, customStatus: user.customStatus };
+          }
+          const u = await db.getUserById(uid);
+          const st: UserStatus = u && u.status !== 'offline' ? u.status : 'online';
+          return { userId: uid, status: st, customStatus: u?.customStatus };
+        })
+      );
+      socket.emit('initial_presence', initialPresence);
+    } catch (err) {
+      console.error('Error sending initial_presence:', err);
+    }
 
     // Auto-join user to their own personal notification room
     socket.join(`user:${userId}`);

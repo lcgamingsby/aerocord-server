@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../config/database';
 import { generateToken, revokeToken, AuthenticatedRequest } from '../middleware/auth';
 import { User, FriendRelation } from '../types';
+import { getIO, isUserOnline } from '../socket/socketHandler';
 import { 
   generateBase32Secret, 
   verifyTOTPCode, 
@@ -578,6 +579,17 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
   const updated = await db.updateUser(req.user.id, updates);
   if (!updated) { res.status(404).json({ error: 'User not found.' }); return; }
   const { passwordHash: _, ...safeUser } = updated;
+
+  const io = getIO();
+  if (io) {
+    io.emit('user_presence_change', {
+      userId: safeUser.id,
+      status: isUserOnline(safeUser.id) ? (safeUser.status === 'offline' ? 'offline' : safeUser.status) : 'offline',
+      customStatus: safeUser.customStatus
+    });
+    io.emit('user_updated', safeUser);
+  }
+
   res.json({ user: safeUser });
 };
 
@@ -590,7 +602,9 @@ export const getFriends = async (req: AuthenticatedRequest, res: Response): Prom
     let safeFriend = undefined;
     if (friendUser) {
       const { passwordHash: _, ...safe } = friendUser;
-      safeFriend = safe;
+      const online = isUserOnline(friendId);
+      const effectiveStatus = online ? (safe.status === 'offline' ? 'online' : safe.status) : 'offline';
+      safeFriend = { ...safe, status: effectiveStatus };
     }
     return { relationId: rel.id, status: rel.status, isSender: rel.userId === req.user!.id, createdAt: rel.createdAt, friend: safeFriend };
   }));
@@ -613,6 +627,18 @@ export const sendFriendRequest = async (req: AuthenticatedRequest, res: Response
   }
   const relation: FriendRelation = { id: `fr_${uuidv4()}`, userId: req.user.id, friendId: targetUser.id, status: 'pending', createdAt: new Date().toISOString() };
   await db.addFriendRelation(relation);
+
+  const io = getIO();
+  if (io) {
+    const { passwordHash: _, ...safeSender } = req.user;
+    io.to(`user:${targetUser.id}`).emit('friend_request_received', {
+      relationId: relation.id,
+      from: safeSender
+    });
+    io.to(`user:${targetUser.id}`).emit('friends_updated');
+    io.to(`user:${req.user.id}`).emit('friends_updated');
+  }
+
   res.status(201).json({ message: 'Friend request sent successfully.', relation });
 };
 
@@ -625,7 +651,19 @@ export const respondFriendRequest = async (req: AuthenticatedRequest, res: Respo
   if (action === 'accept') { await db.updateFriendRelation(rel.id, 'accepted'); res.json({ message: 'Friend request accepted.' }); }
   else if (action === 'decline') { await db.removeFriendRelation(rel.userId, rel.friendId); res.json({ message: 'Friend request declined.' }); }
   else if (action === 'block') { await db.updateFriendRelation(rel.id, 'blocked'); res.json({ message: 'User blocked.' }); }
-  else { res.status(400).json({ error: 'Invalid action.' }); }
+  else { res.status(400).json({ error: 'Invalid action.' }); return; }
+
+  const io = getIO();
+  if (io) {
+    const { passwordHash: _, ...safeResponder } = req.user;
+    io.to(`user:${rel.userId}`).emit('friend_request_responded', {
+      relationId: rel.id,
+      action,
+      byUser: safeResponder
+    });
+    io.to(`user:${rel.userId}`).emit('friends_updated');
+    io.to(`user:${rel.friendId}`).emit('friends_updated');
+  }
 };
 
 export const searchUsers = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

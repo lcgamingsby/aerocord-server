@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../config/database';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { Server, Channel, Role } from '../types';
+import { getIO, isUserOnline } from '../socket/socketHandler';
 
 export const getServers = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ error: 'Unauthorized.' }); return; }
@@ -21,7 +22,12 @@ export const getServerDetails = async (req: AuthenticatedRequest, res: Response)
   const populatedMembers = await Promise.all(server.members.map(async m => {
     const user = await db.getUserById(m.userId);
     let safeUser = undefined;
-    if (user) { const { passwordHash: _, ...safe } = user; safeUser = safe; }
+    if (user) {
+      const { passwordHash: _, ...safe } = user;
+      const online = isUserOnline(m.userId);
+      const effectiveStatus = online ? (safe.status === 'offline' ? 'online' : safe.status) : 'offline';
+      safeUser = { ...safe, status: effectiveStatus };
+    }
     return { ...m, user: safeUser };
   }));
   res.json({ server: { ...server, members: populatedMembers.filter(m => m.user !== undefined) } });
@@ -75,6 +81,7 @@ export const joinServerByInvite = async (req: AuthenticatedRequest, res: Respons
   const memberRole = server.roles.find(r => r.name === 'Member') || server.roles[server.roles.length - 1];
   const updatedMembers = [...server.members, { userId: req.user.id, serverId: server.id, roleIds: memberRole ? [memberRole.id] : [], joinedAt: new Date().toISOString() }];
   await db.updateServer(server.id, { members: updatedMembers });
+  getIO()?.emit('server_updated', { serverId: server.id });
   res.json({ server: { ...server, members: updatedMembers }, message: `Successfully joined ${server.name}!` });
 };
 
@@ -95,6 +102,7 @@ export const createChannel = async (req: AuthenticatedRequest, res: Response): P
   const targetCategoryId = categoryId && server.categories.some(c => c.id === categoryId) ? categoryId : (type === 'voice' ? voiceCategory?.id : textCategory?.id);
   const newChannel: Channel = { id: `chan_${uuidv4()}`, serverId, categoryId: targetCategoryId, name: type === 'voice' ? `${name}` : formattedName, type: type === 'voice' ? 'voice' : 'text', topic: topic || '', position: server.channels.length + 1, createdAt: new Date().toISOString() };
   await db.addChannel(serverId, newChannel);
+  getIO()?.emit('server_updated', { serverId });
   res.status(201).json({ channel: newChannel });
 };
 
@@ -110,6 +118,7 @@ export const deleteChannel = async (req: AuthenticatedRequest, res: Response): P
   if (!canManage) { res.status(403).json({ error: 'Permission denied to delete channels.' }); return; }
   const success = await db.deleteChannel(serverId, channelId);
   if (!success) { res.status(404).json({ error: 'Channel not found.' }); return; }
+  getIO()?.emit('server_updated', { serverId });
   res.json({ message: 'Channel deleted successfully.' });
 };
 
@@ -127,6 +136,7 @@ export const updateServer = async (req: AuthenticatedRequest, res: Response): Pr
   if (roles !== undefined) updates.roles = roles;
   if (members !== undefined) updates.members = members;
   const updated = await db.updateServer(serverId, updates);
+  getIO()?.emit('server_updated', { serverId });
   res.json({ server: updated || server, message: 'Pengaturan server berhasil diperbarui.' });
 };
 
@@ -137,6 +147,7 @@ export const deleteServer = async (req: AuthenticatedRequest, res: Response): Pr
   if (!server) { res.status(404).json({ error: 'Server not found.' }); return; }
   if (server.ownerId !== req.user.id) { res.status(403).json({ error: 'Hanya server owner yang dapat menghapus server.' }); return; }
   await db.deleteServer(serverId);
+  getIO()?.emit('server_deleted', { serverId });
   res.json({ message: 'Server berhasil dihapus.' });
 };
 
@@ -152,6 +163,7 @@ export const updateChannel = async (req: AuthenticatedRequest, res: Response): P
   if (topic !== undefined) channel.topic = topic.trim();
   if (categoryId) channel.categoryId = categoryId;
   await db.updateServer(serverId, { channels: server.channels });
+  getIO()?.emit('server_updated', { serverId });
   res.json({ channel, message: 'Channel berhasil diperbarui.' });
 };
 
@@ -164,5 +176,6 @@ export const createCategory = async (req: AuthenticatedRequest, res: Response): 
   const newCat = { id: `cat_${uuidv4().substring(0, 8)}`, name: name?.trim() || 'Group Channel Baru', serverId, position: server.categories.length + 1 };
   const updatedCategories = [...(server.categories || []), newCat];
   await db.updateServer(serverId, { categories: updatedCategories });
+  getIO()?.emit('server_updated', { serverId });
   res.status(201).json({ category: newCat, server: { ...server, categories: updatedCategories } });
 };
